@@ -1,60 +1,43 @@
 #!/bin/bash
+set -euo pipefail
 
-# Ensure an argument is provided
-if [ -z "$1" ]; then
-    echo "Usage: $0 <working_folder> all|release"
+usage() {
+    echo "Usage: $0 <working_folder> all|release" >&2
+}
+
+if [ $# -lt 2 ]; then
+    usage
     exit 1
 fi
 
-if [ -z "$2" ]; then
-    echo "Usage: $0 <working_folder> all|release"
-    exit 1
-fi
+WORKING_FOLDER=$1
+BUILD_TYPE=$2
+TARGET_FIRMWARE="target_firmware.h"
 
-working_folder=$1
-build_type=$2
-target_firmware="target_firmware.h"
+run_stcmd() {
+    STCMD_NO_TTY=1 ST_WORKING_FOLDER="$WORKING_FOLDER" stcmd "$@"
+}
 
-# ST_WORKING_FOLDER=$working_folder/configurator stcmd make $build_type
-ST_WORKING_FOLDER=$working_folder stcmd make $build_type
+run_stcmd make "$BUILD_TYPE"
 
-#filename_tos="./dist/SIDECART.TOS"
+FILENAME="./dist/FIRMWARE.IMG"
+run_stcmd cp ./dist/BOOT.BIN "$FILENAME"
 
-# Copy the SIDECART.TOS file for testing purposes
-#ST_WORKING_FOLDER=$working_folder stcmd cp ./configurator/dist/SIDECART.TOS $filename_tos
+FILESIZE=$(run_stcmd stat -c %s "$FILENAME")
+TARGET_SIZE=$((64 * 1024))
 
-filename="./dist/FIRMWARE.IMG"
-
-# Copy the BOOT.BIN file to a ROM size file for testing
-ST_WORKING_FOLDER=$working_folder stcmd cp ./dist/BOOT.BIN $filename
-
-# Determine the file size accordingly
-filesize=$(ST_WORKING_FOLDER=$working_folder stcmd stat -c %s "$filename")
-
-# Size for 64Kbytes in bytes
-targetsize=$((64 * 1024))
-
-# Check if the file is larger than 64Kbytes
-if [ "$filesize" -gt "$targetsize" ]; then
-    echo "The file is already larger than 64Kbytes."
+if [ "$FILESIZE" -gt "$TARGET_SIZE" ]; then
+    echo "The firmware image exceeds 64 KB after build." >&2
     exit 2
 fi
 
-# Resize the file to 64Kbytes
-ST_WORKING_FOLDER=$working_folder stcmd truncate -s $targetsize $filename
+run_stcmd truncate -s "$TARGET_SIZE" "$FILENAME"
 
-if [ $? -ne 0 ]; then
-    echo "Failed to resize the file."
-    exit 3
-fi
+echo "Creating $TARGET_FIRMWARE"
+python firmware.py --input="$FILENAME" --output="$TARGET_FIRMWARE" --array_name=target_firmware
 
-echo "File has been resized."
+cp "$TARGET_FIRMWARE" "../../rp/src/include/$TARGET_FIRMWARE"
+echo "Copied $TARGET_FIRMWARE to rp/src/include/$TARGET_FIRMWARE"
 
-echo "Creating the firmware.h file."
-python firmware.py --input=dist/FIRMWARE.IMG --output=$target_firmware --array_name=target_firmware
-
-cp $target_firmware ../../rp/src/include/$target_firmware
-echo "Copied $target_firmware to rp/src/include/$target_firmware"
-
-rm $target_firmware
-echo "Removed $target_firmware"
+rm "$TARGET_FIRMWARE"
+echo "Removed temporary $TARGET_FIRMWARE"

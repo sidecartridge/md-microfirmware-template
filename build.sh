@@ -1,100 +1,146 @@
 #!/bin/bash
+set -euo pipefail
 
-# Get the absolute path of the current script
-SCRIPT_DIR=$(dirname "$(realpath "$0")") 
+SCRIPT_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-# Ensure all required arguments are provided
-if [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]; then
-    echo "Usage: $0 <board_type> <build_type> <app_uuid_key>"
-    echo "Example: $0 pico|pico_w debug|release 123e4567-e89b-12d3-a456-426614174000"
+usage() {
+    cat <<USAGE
+Usage: $0 [board_type] [build_type] <app_uuid_key>
+
+Arguments:
+  board_type   Optional. Defaults to pico_w. Supported: pico, pico_w
+  build_type   Optional. Defaults to release. Supported: release, debug
+  app_uuid_key Required. UUID that matches the entry in desc/app.json
+
+Examples:
+  $0 pico release 123e4567-e89b-12d3-a456-426614174000
+  $0 pico_w debug 5e8d2c5c-7caa-4b64-aa8f-7aaf84c1c111
+  $0 5e8d2c5c-7caa-4b64-aa8f-7aaf84c1c111   # uses defaults pico_w/release
+USAGE
+}
+
+BOARD_TYPE=${1:-pico_w}
+BUILD_TYPE=${2:-release}
+APP_UUID_KEY=${3:-}
+
+# If only two args provided assume they meant board/build+uuid; if only uuid
+# was provided, shift the parameters down.
+if [[ -z "$APP_UUID_KEY" ]]; then
+    if [[ "$BOARD_TYPE" =~ ^[0-9a-fA-F-]{36}$ ]] && [[ $# -eq 1 ]]; then
+        APP_UUID_KEY=$BOARD_TYPE
+        BOARD_TYPE=pico_w
+        BUILD_TYPE=release
+    elif [[ "$BUILD_TYPE" =~ ^[0-9a-fA-F-]{36}$ ]] && [[ $# -eq 2 ]]; then
+        APP_UUID_KEY=$BUILD_TYPE
+        BUILD_TYPE=release
+    else
+        usage
+        exit 1
+    fi
+fi
+
+case "$BOARD_TYPE" in
+  pico|pico_w)
+    ;;
+  *)
+    echo "Unsupported board type '$BOARD_TYPE'. Use pico or pico_w." >&2
+    exit 1
+    ;;
+esac
+
+BUILD_TYPE_LOWER=$(echo "$BUILD_TYPE" | tr '[:upper:]' '[:lower:]')
+case "$BUILD_TYPE_LOWER" in
+  release|debug)
+    ;;
+  *)
+    echo "Unsupported build type '$BUILD_TYPE'. Use release or debug." >&2
+    exit 1
+    ;;
+esac
+
+if [[ ! -f "$SCRIPT_DIR/version.txt" ]]; then
+    echo "version.txt not found next to build.sh" >&2
     exit 1
 fi
 
-# Copy the version.txt to each project
-echo "Copy version.txt to each project"
-cp version.txt rp/
-cp version.txt target/
+GIT_ROOT=$SCRIPT_DIR
+git -C "$GIT_ROOT" submodule update --init --recursive >/dev/null
 
-# Display the version information
-export VERSION=$(cat version.txt)
+echo "Copy version.txt to component projects"
+cp "$SCRIPT_DIR/version.txt" "$SCRIPT_DIR/rp/"
+cp "$SCRIPT_DIR/version.txt" "$SCRIPT_DIR/target/"
+
+VERSION=$(tr -d '\r\n ' < "$SCRIPT_DIR/version.txt")
 echo "Version: $VERSION"
-
-# Set the board type to be used for building
-export BOARD_TYPE=$1
 echo "Board type: $BOARD_TYPE"
-
-# Set the release or debug build type
-export BUILD_TYPE=$2
-echo "Build type: $BUILD_TYPE"
-
-# Set the APP_UUID_KEY of the app to be built
-export APP_UUID_KEY=$3
+echo "Build type: $BUILD_TYPE_LOWER"
 echo "App UUID Key: $APP_UUID_KEY"
 
-# Set the dist directory. Delete previous contents if any
-echo "Delete previous dist directory"
-rm -rf dist
-mkdir dist
+DIST_DIR="$SCRIPT_DIR/dist"
+rm -rf "$DIST_DIR"
+mkdir -p "$DIST_DIR"
 
-# Build the project in the target architecture
-echo "Building target project"
-cd target/atarist
-./build.sh "$SCRIPT_DIR/target/atarist" release
-cd ../..
-echo "Done building target project"
+echo "Building Atari ST target payload"
+(
+  cd "$SCRIPT_DIR/target/atarist"
+  ./build.sh "$SCRIPT_DIR/target/atarist" release
+)
 
-# Build the rp project in the RP architecture
-echo "Building rp project"
-cd rp
-./build.sh "$BOARD_TYPE" "$BUILD_TYPE"
-if [ "$BUILD_TYPE" = "release" ]; then
-    cp  ./dist/rp-$BOARD_TYPE.uf2 ../dist/rp.uf2
-else
-    cp  ./dist/rp-$BOARD_TYPE-$BUILD_TYPE.uf2 ../dist/rp.uf2
-fi
-cd ..
-echo "Done building rp project"
+echo "Building RP firmware"
+(
+  cd "$SCRIPT_DIR/rp"
+  ./build.sh "$BOARD_TYPE" "$BUILD_TYPE_LOWER"
+  if [ "$BUILD_TYPE_LOWER" = "release" ]; then
+    cp "./dist/rp-$BOARD_TYPE.uf2" "$DIST_DIR/rp.uf2"
+  else
+    cp "./dist/rp-$BOARD_TYPE-$BUILD_TYPE_LOWER.uf2" "$DIST_DIR/rp.uf2"
+  fi
+)
 
-# Calculate the md5sum of the generated rp.uf2 file
-md5sum dist/rp.uf2 > dist/rp.uf2.md5sum
+BINARY_MD5=$(python3 - <<'PY'
+import hashlib, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+data = path.read_bytes()
+print(hashlib.md5(data).hexdigest())
+PY "$DIST_DIR/rp.uf2")
 
-# Show the md5sum of the generated rp.uf2 file
-echo "md5sum of the generated rp.uf2 file:"
-cat dist/rp.uf2.md5sum
+echo "$BINARY_MD5  rp.uf2" > "$DIST_DIR/rp.uf2.md5sum"
 
-# Now inform the user that the build is complet and must
-# modify the app.json file with the new md5sum and the UUID
-echo "Build completed successfully. Please update the app.json file with the new md5sum and the UUID"
-
-# Rename the file to the standard name <APP_UUID>.uf2
-mv dist/rp.uf2 dist/$APP_UUID_KEY.uf2
-
-# Check that there is a app.json file in the dist directory
-if [ ! -f desc/app.json ]; then
-    echo "app.json file not found in the 'desc'' directory. Please create one."
+APP_JSON_TEMPLATE="$SCRIPT_DIR/desc/app.json"
+if [ ! -f "$APP_JSON_TEMPLATE" ]; then
+    echo "app.json file not found in the desc directory. Please create one." >&2
     exit 1
 fi
 
-# Copy the app.json file to the dist directory
-cp desc/app.json dist/
+FINAL_UF2="$DIST_DIR/$APP_UUID_KEY-$VERSION.uf2"
+mv "$DIST_DIR/rp.uf2" "$FINAL_UF2"
+cp "$APP_JSON_TEMPLATE" "$DIST_DIR/app.json"
 
-# Use portable sed for Linux and macOS
-if [ "$(uname)" = "Darwin" ]; then
-    sed -i '' "s/<APP_UUID>/$APP_UUID_KEY/g" dist/app.json
-    sed -i '' "s/<BINARY_MD5_HASH>/$(cat dist/rp.uf2.md5sum | cut -d ' ' -f 1)/g" dist/app.json
-    sed -i '' "s/<APP_VERSION>/$VERSION/g" dist/app.json
-else
-    sed -i "s/<APP_UUID>/$APP_UUID_KEY/g" dist/app.json
-    sed -i "s/<BINARY_MD5_HASH>/$(cat dist/rp.uf2.md5sum | cut -d ' ' -f 1)/g" dist/app.json
-    sed -i "s/<APP_VERSION>/$VERSION/g" dist/app.json
-fi
+# Portable replacements (sed -i differences) handled via temp file
+replace_token() {
+  local token=$1
+  local value=$2
+  python3 - "$DIST_DIR/app.json" "$token" "$value" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+token, value = sys.argv[2], sys.argv[3]
+data = path.read_text()
+path.write_text(data.replace(token, value))
+PY
+}
 
-mv dist/$APP_UUID_KEY.uf2 dist/$APP_UUID_KEY-$VERSION.uf2
+replace_token "<APP_UUID>" "$APP_UUID_KEY"
+replace_token "<BINARY_MD5_HASH>" "$BINARY_MD5"
+replace_token "<APP_VERSION>" "$VERSION"
 
-# Show the content of the $APP_UUID_KEY.json file
-echo "Content of the $APP_UUID_KEY.json file:"
-mv dist/app.json dist/$APP_UUID_KEY.json
-cat dist/$APP_UUID_KEY.json
+FINAL_JSON="$DIST_DIR/$APP_UUID_KEY.json"
+mv "$DIST_DIR/app.json" "$FINAL_JSON"
 
-# Done
+cat <<SUMMARY
+Build completed successfully.
+  UF2 : $(basename "$FINAL_UF2")
+  JSON: $(basename "$FINAL_JSON")
+  MD5 : $BINARY_MD5
+SUMMARY
+
 exit 0
