@@ -4,12 +4,24 @@ static reset_callback_t reset_cb = NULL;
 static reset_callback_t reset_long_cb = NULL;
 static volatile bool core1WaitActive = false;
 static bool selectPressedLatched = false;
+static absolute_time_t selectPressStartTime;
+static bool selectLongPressDetected = false;
 
 static bool select_detectStableState(bool expectedState) {
   bool firstSample = select_detectPush();
   sleep_ms(SELECT_DEBOUNCE_DELAY);
   bool secondSample = select_detectPush();
   return ((firstSample == expectedState) && (secondSample == expectedState));
+}
+
+static uint32_t select_getPressDurationMs(void) {
+  int64_t elapsedUs =
+      absolute_time_diff_us(selectPressStartTime, get_absolute_time());
+  if (elapsedUs <= 0) {
+    return 0;
+  }
+
+  return (uint32_t)(elapsedUs / 1000);
 }
 
 void __not_in_flash_func(select_waitPush)() {
@@ -112,17 +124,44 @@ void select_checkPushReset() {
     }
 
     selectPressedLatched = true;
-    DPRINTF("SELECT button pushed. Resetting the device\n");
-    if (reset_cb != NULL) {
-      DPRINTF("SELECT button pushed. Executing reset callback\n");
-      reset_cb();
+    selectPressStartTime = get_absolute_time();
+    selectLongPressDetected = false;
+    DPRINTF("SELECT button pushed. Waiting for release\n");
+    return;
+  }
+
+  if (isPressed && selectPressedLatched) {
+    if (!selectLongPressDetected &&
+        (select_getPressDurationMs() >= SELECT_LONG_RESET)) {
+      selectLongPressDetected = true;
+      DPRINTF("SELECT button long press threshold reached\n");
     }
     return;
   }
 
   if (!isPressed && selectPressedLatched) {
-    if (select_detectStableState(false)) {
-      selectPressedLatched = false;
+    if (!select_detectStableState(false)) {
+      return;
+    }
+
+    uint32_t pressDurationMs = select_getPressDurationMs();
+    bool longPress = selectLongPressDetected ||
+                     (pressDurationMs >= SELECT_LONG_RESET);
+    selectPressedLatched = false;
+    selectLongPressDetected = false;
+
+    DPRINTF("SELECT button released after %lu ms\n",
+            (unsigned long)pressDurationMs);
+    if (longPress) {
+      if (reset_long_cb != NULL) {
+        DPRINTF("Long press detected. Executing long reset callback\n");
+        reset_long_cb();
+      }
+    } else {
+      if (reset_cb != NULL) {
+        DPRINTF("Short press detected. Executing reset callback\n");
+        reset_cb();
+      }
     }
   }
 }
