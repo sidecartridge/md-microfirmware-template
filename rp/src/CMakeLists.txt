@@ -40,30 +40,43 @@ else()
     message(FATAL_ERROR "Unknown BOARD_TYPE: ${BOARD_TYPE}")
 endif()
 
-# Add the env variable FATFS_SDK_PATH if it does not exist
-if(NOT DEFINED ENV{FATFS_SDK_PATH})
-    set(ENV{FATFS_SDK_PATH} ../../fatfs-sdk)
-endif()
-# Show the value
-message("FATFS_SDK_PATH: $ENV{FATFS_SDK_PATH}")
+# Resolve bundled Pico dependencies relative to the repo root so configure
+# works regardless of the active build directory.
+get_filename_component(REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." REALPATH)
+set(DEFAULT_FATFS_SDK_PATH "${REPO_ROOT}/fatfs-sdk")
+set(DEFAULT_PICO_SDK_PATH "${REPO_ROOT}/pico-sdk")
+set(DEFAULT_PICO_EXTRAS_PATH "${REPO_ROOT}/pico-extras")
 
-# Add the env variable PICO_SDK_PATH if it does not exist
-if(NOT DEFINED ENV{PICO_SDK_PATH})
-    set(ENV{PICO_SDK_PATH} ../../pico-sdk)
+if(NOT DEFINED ENV{FATFS_SDK_PATH} OR "$ENV{FATFS_SDK_PATH}" STREQUAL "")
+    set(ENV{FATFS_SDK_PATH} "${DEFAULT_FATFS_SDK_PATH}")
 endif()
-# Show the value
-message("PICO_SDK_PATH: $ENV{PICO_SDK_PATH}")
+set(FATFS_SDK_PATH "$ENV{FATFS_SDK_PATH}" CACHE PATH "Path to the FATFS SDK" FORCE)
+get_filename_component(FATFS_SDK_PATH "${FATFS_SDK_PATH}" REALPATH BASE_DIR "${CMAKE_CURRENT_LIST_DIR}")
+set(FATFS_SDK_PATH "${FATFS_SDK_PATH}" CACHE PATH "Path to the FATFS SDK" FORCE)
+set(ENV{FATFS_SDK_PATH} "${FATFS_SDK_PATH}")
+message("FATFS_SDK_PATH: ${FATFS_SDK_PATH}")
 
-# Add the env variable PICO_EXTRAS_PATH if it does not exist
-if(NOT DEFINED ENV{PICO_EXTRAS_PATH})
-    set(ENV{PICO_EXTRAS_PATH} ../../pico-extras)
+if(NOT DEFINED ENV{PICO_SDK_PATH} OR "$ENV{PICO_SDK_PATH}" STREQUAL "")
+    set(ENV{PICO_SDK_PATH} "${DEFAULT_PICO_SDK_PATH}")
 endif()
-# Show the value
-message("PICO_EXTRAS_PATH: $ENV{PICO_EXTRAS_PATH}")
+set(PICO_SDK_PATH "$ENV{PICO_SDK_PATH}" CACHE PATH "Path to the Raspberry Pi Pico SDK" FORCE)
+get_filename_component(PICO_SDK_PATH "${PICO_SDK_PATH}" REALPATH BASE_DIR "${CMAKE_CURRENT_LIST_DIR}")
+set(PICO_SDK_PATH "${PICO_SDK_PATH}" CACHE PATH "Path to the Raspberry Pi Pico SDK" FORCE)
+set(ENV{PICO_SDK_PATH} "${PICO_SDK_PATH}")
+message("PICO_SDK_PATH: ${PICO_SDK_PATH}")
+
+if(NOT DEFINED ENV{PICO_EXTRAS_PATH} OR "$ENV{PICO_EXTRAS_PATH}" STREQUAL "")
+    set(ENV{PICO_EXTRAS_PATH} "${DEFAULT_PICO_EXTRAS_PATH}")
+endif()
+set(PICO_EXTRAS_PATH "$ENV{PICO_EXTRAS_PATH}" CACHE PATH "Path to the PICO EXTRAS" FORCE)
+get_filename_component(PICO_EXTRAS_PATH "${PICO_EXTRAS_PATH}" REALPATH BASE_DIR "${CMAKE_CURRENT_LIST_DIR}")
+set(PICO_EXTRAS_PATH "${PICO_EXTRAS_PATH}" CACHE PATH "Path to the PICO EXTRAS" FORCE)
+set(ENV{PICO_EXTRAS_PATH} "${PICO_EXTRAS_PATH}")
+message("PICO_EXTRAS_PATH: ${PICO_EXTRAS_PATH}")
 
 # Include build functions from Pico SDK
-include($ENV{PICO_SDK_PATH}/pico_sdk_init.cmake)
-include($ENV{PICO_EXTRAS_PATH}/external/pico_extras_import.cmake)
+include(${PICO_SDK_PATH}/pico_sdk_init.cmake)
+include(${PICO_EXTRAS_PATH}/external/pico_extras_import.cmake)
 
 # Set name of project (as PROJECT_NAME) and C/C   standards
 project(rp C CXX)
@@ -80,7 +93,7 @@ add_subdirectory(u8g2)
 add_subdirectory(httpc)
 
 # Tell CMake where to find other source code
-add_subdirectory($ENV{FATFS_SDK_PATH}/src build)
+add_subdirectory(${FATFS_SDK_PATH}/src build)
   
 # Tell CMake where to find the executable source file
 add_executable(${PROJECT_NAME} 
