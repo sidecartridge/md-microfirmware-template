@@ -14,6 +14,8 @@
 #include "target_firmware.h"  // Include the target firmware binary
 
 #include "aconfig.h"
+#include "chandler.h"
+#include "commemul.h"
 #include "constants.h"
 #include "debug.h"
 #include "display.h"
@@ -74,6 +76,13 @@ static const size_t numCommands = sizeof(commands) / sizeof(commands[0]);
 static bool keepActive = true;
 static bool menuScreenActive = false;
 static absolute_time_t menuRefreshTime;
+
+// Polling tick used as the network poll callback so command handling stays
+// alive during multi-second WiFi operations.
+static void __not_in_flash_func(emul_pollTick)(void) {
+  chandler_loop();
+  term_loop();
+}
 
 #define MENU_REFRESH_TIME_MS 1000
 
@@ -305,14 +314,16 @@ void emul_start() {
   // Copy the terminal firmware to RAM
   COPY_FIRMWARE_TO_RAM((uint16_t *)target_firmware, target_firmware_length);
 
-  // Initialize the terminal emulator PIO programs
-  // The communication between the remote (target) computer and the RP2040 is
-  // done using a command protocol over the cartridge bus
-  // term_dma_irq_handler_lookup is the implementation of the terminal emulator
-  // using the command protocol.
-  // Hence, if you want to implement your own app or microfirmware, you should
-  // implement your own command handler using this protocol.
-  init_romemul(NULL, term_dma_irq_handler_lookup, false);
+  // Initialize the cartridge ROM4 read engine. ROM4 reads are served entirely
+  // by chained DMAs feeding the PIO TX FIFO — no CPU/IRQ involvement.
+  init_romemul(false);
+
+  // Bring up the ROM3 command capture (PIO + DMA ring on GPIO 26) and the
+  // command handler that polls the ring, parses the protocol, and dispatches
+  // each command to the registered callbacks.
+  commemul_init();
+  chandler_init();
+  chandler_addCB(term_command_cb);
 
   // After this point, the remote computer can execute the code
 
@@ -385,8 +396,10 @@ void emul_start() {
       if (err != 0) {
         DPRINTF("Error initializing the network: %i. No initializing.\n", err);
       } else {
-        // Set the term_loop as a callback during the polling period
-        network_setPollingCallback(term_loop);
+        // Drain commands and run the terminal loop during WiFi polling so
+        // commands sent during the (potentially multi-second) connect don't
+        // pile up in the ROM3 ring.
+        network_setPollingCallback(emul_pollTick);
         // Connect to the WiFi network
         int maxAttempts = 3;  // or any other number defined elsewhere
         int attempt = 0;
@@ -440,7 +453,11 @@ void emul_start() {
 #else
     sleep_ms(SLEEP_LOOP_MS);
 #endif
-    // Check remote commands
+    // Drain the ROM3 command ring → dispatch to registered callbacks.
+    chandler_loop();
+
+    // Run the terminal foreground (consume the published command, render
+    // output, etc.).
     term_loop();
 
     if (menuScreenActive) {

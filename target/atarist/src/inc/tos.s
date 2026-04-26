@@ -132,7 +132,7 @@ pchar2	macro
 	pchar	\1
 	pchar	\2
 	movem.l	(sp)+,d0-d2/a0-a2
-	endmv
+	endm
 
 crlf	macro
 	movem.l	d0-d2/a0-a2,-(sp)

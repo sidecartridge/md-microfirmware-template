@@ -360,8 +360,8 @@ _copy_sync_code_write:
     subq.w #1, d5            ; one less
 
     ; Test if the address in A4 is even or odd
-    move.l a4, d0
-    btst #0, d0
+    move.l a4, d4
+    btst #0, d4
     beq.s _write_to_sidecart_even_loop
 _write_to_sidecart_odd_loop:
     move.b  (a4)+, d3       ; Load the high byte
@@ -373,17 +373,17 @@ _write_to_sidecart_odd_loop:
     bra.s _no_more_payload_write_stack
 
  _write_to_sidecart_even_loop:
-    move.w (a4)+, d0          ; Load the word
-    add.w d0, d7              ; Add the word to the checksum
-    tst.b (a0, d0.w)          ; Write the memory to the sidecart
+    move.w (a4)+, d4          ; Load the word
+    add.w d4, d7              ; Add the word to the checksum
+    tst.b (a0, d4.w)          ; Write the memory to the sidecart
     dbf d5, _write_to_sidecart_even_loop
     bra.s _no_more_payload_write_stack
 
  _write_to_sidecart_byteodd_loop:
     addq.l #1, d5             ; Add one byte to the payload before rounding to the next word
     lsr.w #1, d5              ; Copy two bytes each iteration
-    move.l a4, d0             ; Test if the address in A4 is even or odd
-    btst #0, d0
+    move.l a4, d4             ; Test if the address in A4 is even or odd
+    btst #0, d4
     beq.s _write_to_sidecart_byteodd_odd_loop
 
     subq.w #1, d5
@@ -397,11 +397,11 @@ _write_to_sidecart_byteodd_even_loop_copy:
     add.w d3, d7            ; Add the word to the checksum
     dbf d5, _write_to_sidecart_byteodd_even_loop_copy
 _write_to_sidecart_byteodd_loop_tail:
-    move.b (a4)+, d0          ; Load the high byte
-    lsl.w   #8, d0            ; Shift it to the high part of the word
-    and.w #$FF00,d0           ; Mask the upper word
-    add.w d0, d7              ; Add the word to the checksum
-    tst.b (a0, d0.w)          ; Write the memory to the sidecart
+    move.b (a4)+, d4          ; Load the high byte
+    lsl.w   #8, d4            ; Shift it to the high part of the word
+    and.w #$FF00,d4           ; Mask the upper word
+    add.w d4, d7              ; Add the word to the checksum
+    tst.b (a0, d4.w)          ; Write the memory to the sidecart
     bra.s _no_more_payload_write_stack
 
 _write_to_sidecart_byteodd_odd_loop:
@@ -409,15 +409,15 @@ _write_to_sidecart_byteodd_odd_loop:
     beq.s _write_to_sidecart_byteodd_odd_loop_tail
     subq.w #1, d5            ; one less
 _write_to_sidecart_byteodd_odd_loop_copy:
-    move.w (a4)+, d0          ; Load the word
-    add.w d0, d7              ; Add the word to the checksum
-    tst.b (a0, d0.w)          ; Write the memory to the sidecart
+    move.w (a4)+, d4          ; Load the word
+    add.w d4, d7              ; Add the word to the checksum
+    tst.b (a0, d4.w)          ; Write the memory to the sidecart
     dbf d5, _write_to_sidecart_byteodd_odd_loop_copy
 _write_to_sidecart_byteodd_odd_loop_tail:
-    move.w (a4)+, d0          ; Load the word
-    and.w #$FF00,d0           ; Mask the upper word
-    add.w d0, d7              ; Add the word to the checksum
-    tst.b (a0, d0.w)          ; Write the memory to the sidecart
+    move.w (a4)+, d4          ; Load the word
+    and.w #$FF00,d4           ; Mask the upper word
+    add.w d4, d7              ; Add the word to the checksum
+    tst.b (a0, d4.w)          ; Write the memory to the sidecart
 
 _no_more_payload_write_stack:
     add.w d7, d6              ; Add the checksum parameters to the buffer 
@@ -429,7 +429,7 @@ _no_more_payload_write_stack:
 ; This is the code that cannot run in ROM while waiting for the command to complete
 _start_sync_write_code_in_stack:
     swap d2                                        ; D2 is the only register that is not used as a scratch register
-    move.l #COMMAND_TIMEOUT, d6                    ; Most significant word is the inner loop, least significant word is the outer loop
+    move.l #COMMAND_WRITE_TIMEOUT, d6              ; Most significant word is the inner loop, least significant word is the outer loop
     moveq #0, d0                                   ; Timeout
 _start_sync_write_code_in_stack_loop:
     cmp.l (a1), d2                                 ; Compare the random number with the token

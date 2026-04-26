@@ -37,15 +37,12 @@
 #define WRITE_SIGNAL_PIN_COUNT 1
 
 // FLASH and RAM sections constants.
-#define ROM_BANKS 2  // Number of ROM banks to emulate
+#define ROM_BANKS 1  // Number of 64KB ROM banks to emulate (ROM4 only)
 #define FLASH_ROM_LOAD_OFFSET \
-  0x0  // Offset start in FLASH reserved for ROMs. Survives a reset or
-       // poweroff. If 0x0, it means that the 128KB of FLASH are used for the
-       // ROMs. If 0x10000, it means that the first 64KB of FLASH are used for
-       // the ROMs. The second 64KB of FLASH is not in use (ROM3 not used).
-#define FLASH_ROM4_LOAD_OFFSET FLASH_ROM_LOAD_OFFSET  // First 64KB block
-#define FLASH_ROM3_LOAD_OFFSET \
-  (FLASH_ROM_LOAD_OFFSET + 0x10000)              // Second 64KB block
+  0x0  // Offset start in FLASH reserved for the ROM4 image. Survives reset
+       // or poweroff. Only the first 64KB are used; ROM3 is no longer a
+       // data bank (it is now used as the command channel).
+#define FLASH_ROM4_LOAD_OFFSET FLASH_ROM_LOAD_OFFSET  // 64KB ROM4 block
 #define ROM_SIZE_BYTES 0x10000                   // 64KBytes
 #define ROM_SIZE_WORDS (ROM_SIZE_BYTES / 2)      // 32KWords
 #define ROM_SIZE_LONGWORDS (ROM_SIZE_BYTES / 4)  // 16KLongWords
