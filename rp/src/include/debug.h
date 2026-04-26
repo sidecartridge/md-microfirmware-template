@@ -41,6 +41,4 @@
 #define DPRINTFRAW(fmt, ...)
 #endif
 
-typedef void (*IRQInterceptionCallback)();
-
 #endif  // DEBUG_H

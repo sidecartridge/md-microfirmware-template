@@ -13,7 +13,6 @@
 #include <stdbool.h>
 #include <stdio.h>
 
-#include "romemul.pio.h"
 #include "constants.h"
 #include "debug.h"
 #include "hardware/dma.h"
@@ -22,19 +21,11 @@
 #include "hardware/vreg.h"
 #include "memfunc.h"
 #include "pico/stdlib.h"
+#include "romemul.pio.h"
 
-#define ROMEMUL_BUS_BITS 17
-
-// extern int read_addr_rom_dma_channel;
-// extern int lookup_data_rom_dma_channel;
+#define ROMEMUL_BUS_BITS 16
 
 // Function Prototypes
-int init_romemul(IRQInterceptionCallback requestCallback,
-                 IRQInterceptionCallback responseCallback, bool copyFlashToRAM);
-
-void dma_irqHandlerLookup(void);
-void dma_irqHandlerAddress(void);
-void dma_setResponseCB(IRQInterceptionCallback responseCallback);
-int romemul_getLookupDataRomDmaChannel(void);
+int init_romemul(bool copyFlashToRAM);
 
 #endif  // ROMEMUL_H

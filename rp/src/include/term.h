@@ -12,12 +12,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include "pico.h"
-
-#define ADDRESS_HIGH_BIT 0x8000  // High bit of the address
-
-#ifndef ROM3_GPIO
-#define ROM3_GPIO 26
-#endif
+#include "tprotocol.h"
 
 #ifndef ROM4_GPIO
 #define ROM4_GPIO 22
@@ -98,7 +93,14 @@ typedef struct {
   void (*handler)(const char *arg);
 } Command;
 
-void __not_in_flash_func(term_dma_irq_handler_lookup)(void);
+/**
+ * @brief chandler callback that publishes a parsed protocol command
+ *        into the terminal double-buffer for term_loop() to drain.
+ *
+ * Register with chandler_addCB() during application init.
+ */
+void __not_in_flash_func(term_command_cb)(TransmissionProtocol *protocol,
+                                          uint16_t *payloadPtr);
 
 void term_init(void);
 

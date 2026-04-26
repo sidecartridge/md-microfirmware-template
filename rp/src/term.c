@@ -15,11 +15,11 @@
 #include <time.h>
 
 #include "aconfig.h"
+#include "chandler.h"
 #include "constants.h"
 #include "debug.h"
 #include "display.h"
 #include "display_term.h"
-#include "hardware/dma.h"
 #include "hardware/sync.h"
 #include "gconfig.h"
 #include "memfunc.h"
@@ -135,18 +135,18 @@ void term_setCommands(const Command *cmds, size_t count) {
 }
 
 /**
- * @brief Callback that handles the protocol command received.
+ * @brief chandler callback that publishes a fully-parsed protocol command
+ *        into the terminal's double-buffer for term_loop() to consume.
  *
- * This callback copy the content of the protocol to the last_protocol
- * structure. The last_protocol_valid flag is set to true to indicate that the
- * last_protocol structure contains a valid protocol. We return to the
- * dma_irq_handler_lookup function to continue asap with the next
- *
- * @param protocol The TransmissionProtocol structure containing the protocol
- * information.
+ * Called from chandler_loop() on core 0 (or wherever the application drains
+ * commemul). Copies the command into the inactive slot and atomically swaps
+ * read/write roles. payloadPtr is provided by chandler (already advanced past
+ * the random token) but term doesn't use it directly — it re-derives the
+ * pointer from the published snapshot inside term_loop().
  */
-static inline void __not_in_flash_func(handle_protocol_command)(
-    const TransmissionProtocol *protocol) {
+void __not_in_flash_func(term_command_cb)(TransmissionProtocol *protocol,
+                                          uint16_t *payloadPtr) {
+  (void)payloadPtr;
   uint8_t writeIndex = protocolWriteIndex;
   TransmissionProtocol *writeBuffer = &protocolBuffers[writeIndex];
 
@@ -174,37 +174,6 @@ static inline void __not_in_flash_func(handle_protocol_command)(
   protocolReadIndex = writeIndex;
   protocolWriteIndex = readIndex;
   protocolBufferReady = true;
-};
-
-static inline void __not_in_flash_func(handle_protocol_checksum_error)(
-    const TransmissionProtocol *protocol) {
-  DPRINTF("Checksum error detected (ID=%u, Size=%u)\n", protocol->command_id,
-          protocol->payload_size);
-}
-
-// Interrupt handler for DMA completion
-void __not_in_flash_func(term_dma_irq_handler_lookup)(void) {
-  int lookupChannel = romemul_getLookupDataRomDmaChannel();
-  if ((lookupChannel < 0) || (lookupChannel >= NUM_DMA_CHANNELS)) {
-    return;
-  }
-
-  // Read the rom3 signal and if so then process the command
-  dma_hw->ints1 = 1u << (uint)lookupChannel;
-
-  // Read once to avoid redundant hardware access
-  uint32_t addr = dma_hw->ch[(uint)lookupChannel].al3_read_addr_trig;
-
-  // Check ROM3 signal (bit 16)
-  // We expect that the ROM3 signal is not set very often, so this should help
-  // the compilar to run faster
-  if (__builtin_expect(addr & 0x00010000, 0)) {
-    // Invert highest bit of low word to get 16-bit address
-    uint16_t addr_lsb = (uint16_t)(addr ^ ADDRESS_HIGH_BIT);
-
-    tprotocol_parse(addr_lsb, handle_protocol_command,
-                    handle_protocol_checksum_error);
-  }
 }
 
 static char screen[TERM_SCREEN_SIZE];

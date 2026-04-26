@@ -51,6 +51,7 @@ RANDOM_TOKEN_ADDR:        equ (ROM4_ADDR + $F000) 	      ; Random token address 
 RANDOM_TOKEN_SEED_ADDR:   equ (RANDOM_TOKEN_ADDR + 4) 	  ; RANDOM_TOKEN_ADDR + 4 bytes
 RANDOM_TOKEN_POST_WAIT:   equ $1        		      	  ; Wait this cycles after the random number generator is ready
 COMMAND_TIMEOUT           equ $0000FFFF                   ; Timeout for the command
+COMMAND_WRITE_TIMEOUT     equ COMMAND_TIMEOUT              ; Timeout for write commands (separate so apps can extend it for large payloads)
 
 SHARED_VARIABLES:     	  equ (RANDOM_TOKEN_ADDR + $200)  ; random token + 512 bytes to the shared variables area: $FAF200
 
