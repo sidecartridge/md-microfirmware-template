@@ -33,5 +33,10 @@ userfw:
 	rts
 
 hello_msg:
-	dc.b	"Example firmware load...",13,10,0
+	; ESC E = VT52 clear screen + home cursor
+	dc.b	27,"E"
+	dc.b	"Example firmware load..."
+	dc.b	0,255
 	even
+	dc.l 0
+		

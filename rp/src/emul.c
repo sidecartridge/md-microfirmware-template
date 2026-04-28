@@ -11,8 +11,6 @@
 #include <stdint.h>
 
 // inclusw in the C file to avoid multiple definitions
-#include "target_firmware.h"  // Include the target firmware binary
-
 #include "aconfig.h"
 #include "chandler.h"
 #include "commemul.h"
@@ -28,6 +26,7 @@
 #include "romemul.h"
 #include "sdcard.h"
 #include "select.h"
+#include "target_firmware.h"  // Include the target firmware binary
 #include "term.h"
 
 #define SLEEP_LOOP_MS 100
@@ -40,6 +39,7 @@ enum {
 static void cmdMenu(const char *arg);
 static void cmdClear(const char *arg);
 static void cmdExit(const char *arg);
+static void cmdFirmware(const char *arg);
 static void cmdHelp(const char *arg);
 static void cmdBooster(const char *arg);
 static void cmdSettings(const char *arg);
@@ -56,6 +56,7 @@ static const Command commands[] = {
     {"m", cmdMenu},
     {"h", cmdHelp},
     {"e", cmdExit},
+    {"f", cmdFirmware},
     {"x", cmdBooster},
     {"?", cmdHelp},
     {"s", cmdSettings},
@@ -101,7 +102,7 @@ static void menu(void) {
   menuScreenActive = true;
   showTitle();
   term_printString("\n\n");
-  term_printString("[S]ettings     | Back to this [M]enu\n");
+  term_printString("[S]ettings     | [F]irmware launch\n");
   term_printString("[E]xit desktop | [X] Back to Booster\n\n");
 
   // Display network information
@@ -123,6 +124,7 @@ void cmdHelp(const char *arg) {
   term_printString(" General:\n");
   term_printString("  clear   - Clear the terminal screen\n");
   term_printString("  exit    - Exit the terminal\n");
+  term_printString("  f       - Launch user firmware on the Atari ST\n");
   term_printString("  help    - Show available commands\n");
 }
 
@@ -136,6 +138,17 @@ void cmdExit(const char *arg) {
   term_printString("Exiting terminal...\n");
   // Send continue to desktop command
   SEND_COMMAND_TO_DISPLAY(DISPLAY_COMMAND_CONTINUE);
+}
+
+void cmdFirmware(const char *arg) {
+  menuScreenActive = false;
+  term_printString("Launching user firmware on the Atari ST...\n");
+  // Write CMD_START into the cartridge sentinel slot. The m68k's
+  // check_commands macro polls the slot every vsync; on CMD_START it
+  // beq's into rom_function, which jmp's to USERFW (target/atarist/src/
+  // userfw.s). The default userfw demo prints
+  // "Example firmware load..." via Cconws and returns.
+  SEND_COMMAND_TO_DISPLAY(DISPLAY_COMMAND_START);
 }
 
 void cmdBooster(const char *arg) {
@@ -369,7 +382,8 @@ void emul_start() {
   }
   int sdcardErr = sdcard_initFilesystem(&fsys, folderName);
   if (sdcardErr != SDCARD_INIT_OK) {
-    DPRINTF("SD card unavailable (error %i). Continuing without SD.\n", sdcardErr);
+    DPRINTF("SD card unavailable (error %i). Continuing without SD.\n",
+            sdcardErr);
   } else {
     DPRINTF("SD card found & initialized\n");
   }

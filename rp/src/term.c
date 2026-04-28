@@ -570,8 +570,7 @@ void __not_in_flash_func(term_loop)() {
         "Command ID: %d. Size: %d. Random token: 0x%08X, Checksum: 0x%04X, "
         "Overwrites: %lu\n",
         protocolSnapshot.command_id, protocolSnapshot.payload_size, randomToken,
-        protocolSnapshot.final_checksum,
-        (unsigned long)overwriteCountSnapshot);
+        protocolSnapshot.final_checksum, (unsigned long)overwriteCountSnapshot);
 
 #if defined(_DEBUG) && (_DEBUG != 0)
     // Jump the random token
@@ -827,9 +826,10 @@ static void term_appendMoveAndClearLine(char *buffer, size_t bufferSize,
   }
 
   size_t remaining = bufferSize - *offset;
-  int written = snprintf(buffer + *offset, remaining, "\x1B"
-                                                      "Y%c%c\x1B"
-                                                      "K",
+  int written = snprintf(buffer + *offset, remaining,
+                         "\x1B"
+                         "Y%c%c\x1B"
+                         "K",
                          (char)(TERM_POS_Y + row), (char)(TERM_POS_X));
   if (written < 0) {
     return;
@@ -891,8 +891,8 @@ static bool term_buildLiveMenuLines(char *ssidLine, size_t ssidLineSize,
   uint32_t sdFreeMb = 0;
   if (sdcard_getMountedInfo(&sdTotalMb, &sdFreeMb)) {
     snprintf(sdStatus, sizeof(sdStatus), "Mounted");
-    snprintf(sdSpace, sizeof(sdSpace), "%lu/%lu MB free", (unsigned long)sdFreeMb,
-             (unsigned long)sdTotalMb);
+    snprintf(sdSpace, sizeof(sdSpace), "%lu/%lu MB free",
+             (unsigned long)sdFreeMb, (unsigned long)sdTotalMb);
   } else if (sdcard_isMounted()) {
     snprintf(sdStatus, sizeof(sdStatus), "Error");
   }
@@ -965,8 +965,9 @@ void term_refreshMenuLiveInfo(void) {
   // Restore the cursor to the menu prompt input position.
   if (menuPromptValid && (offset < sizeof(updateBuffer))) {
     size_t remaining = sizeof(updateBuffer) - offset;
-    int written = snprintf(updateBuffer + offset, remaining, "\x1B"
-                                                            "Y%c%c",
+    int written = snprintf(updateBuffer + offset, remaining,
+                           "\x1B"
+                           "Y%c%c",
                            (char)(TERM_POS_Y + menuPromptRow),
                            (char)(TERM_POS_X + menuPromptCol));
     if (written > 0) {
@@ -1066,7 +1067,7 @@ void term_cmdSettings(const char *arg) {
   term_printString("  put_int - Set integer (key and value)\n");
   term_printString("  put_bool- Set boolean (key and value)\n");
   term_printString("  put_str - Set string (key and value)\n");
-  term_printString("\n");
+  term_printString("\nEnter 'm' to return to the main menu.\n\n");
 }
 
 void term_cmdPrint(const char *arg) {
