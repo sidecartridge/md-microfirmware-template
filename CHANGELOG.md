@@ -1,5 +1,41 @@
 # Changelog
 
+## v1.2.0 (2026-04-28) - release
+
+### Shared 64 KB region rearranged
+
+Single source-of-truth layout for the region mirrored at m68k
+`$FA0000` / RP `0x20030000`. Cartridge code lives in the first 8 KB,
+metadata block sits just above it, and the framebuffer moves to the
+top so app data fills one contiguous 48 KB arena.
+
+| m68k addr | Region                                       |
+| --------- | -------------------------------------------- |
+| `$FA0000` | CARTRIDGE (max 8 KB, build.sh-enforced)      |
+| `$FA2000` | sentinel + random token + 60 shared vars     |
+| `$FA2100` | TRANSTABLE (512 B high-res mask table)       |
+| `$FA2300` | APP_FREE (~48 KB)                            |
+| `$FAE0C0` | FRAMEBUFFER (8000 B)                         |
+
+Reference offsets via the constants in `rp/src/include/chandler.h`
+and `target/atarist/src/main.s`. Apps that hard-coded the old
+addresses (`$FA8000` framebuffer, `$FAF000` random token) must
+migrate.
+
+### User firmware module
+
+New per-module split via `target/atarist/src/userfw.ld`:
+2 KB for `main.s` + 6 KB for the new `userfw.s` (entry at
+`USERFW = $FA0800`). Pattern mirrors md-drives-emulator's
+`gemdrive.ld`.
+
+Launch path: RP terminal menu `[F]irmware` → `CMD_START = 4` on the
+cartridge sentinel → `rom_function: jmp USERFW`. Default `userfw.s`
+is a Cconws demo that clears the screen and prints
+`Example firmware load...`.
+
+---
+
 ## v1.1.0 (2026-04-27) - release
 
 Architectural port of the framework improvements introduced in
