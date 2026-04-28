@@ -102,6 +102,22 @@ static void network_updateCurrentNetworkInfoRadio(void) {
 }
 #endif
 
+// Strip leading and trailing ASCII whitespace (' ', '\t', '\r', '\n')
+// from a NUL-terminated string in place. Returns a pointer into the
+// same buffer; the input pointer is consumed only for the leading-
+// whitespace skip, the trailing whitespace is replaced with '\0'.
+static char *network_trim_ascii_spaces(char *text) {
+  while (*text == ' ' || *text == '\t') {
+    ++text;
+  }
+  size_t len = strlen(text);
+  while (len > 0 && (text[len - 1] == ' ' || text[len - 1] == '\t' ||
+                     text[len - 1] == '\r' || text[len - 1] == '\n')) {
+    text[--len] = '\0';
+  }
+  return text;
+}
+
 static uint32_t getCountryCode(char *code, char **validCountryStr) {
   *validCountryStr = "XX";
   // empty configuration select worldwide
@@ -738,22 +754,29 @@ wifi_sta_conn_process_status_t network_wifiStaConnect() {
       DPRINTF("Error: DNS configuration is missing.\n");
     } else {
       // Stack-local copy avoids strdup()/free() and the leak-path on
-      // early-return that the previous version had.
+      // early-return that the previous version had. Tolerate whitespace
+      // around the comma separator (e.g. "8.8.8.8, 8.8.4.4") via
+      // network_trim_ascii_spaces.
       char dnsCopy[(NETWORK_MAX_STRING_LENGTH * 2) + 2] = {0};
       snprintf(dnsCopy, sizeof(dnsCopy), "%s", entry->value);
 
-      char *dns1 = strtok(dnsCopy, ",");
-      char *dns2 = strtok(NULL, ",");
+      char *dns1 = network_trim_ascii_spaces(dnsCopy);
+      char *dns2 = strchr(dns1, ',');
+      if (dns2 != NULL) {
+        *dns2++ = '\0';
+        dns2 = network_trim_ascii_spaces(dns2);
+      }
 
       ip_addr_t dns1Ip;
       ip_addr_t dns2Ip;
-      if (dns1 == NULL || (dns1Ip.addr = ipaddr_addr(dns1)) == IPADDR_NONE) {
+      if (dns1[0] == '\0' ||
+          (dns1Ip.addr = ipaddr_addr(dns1)) == IPADDR_NONE) {
         DPRINTF("Error: Invalid DNS1 address.\n");
       } else {
         dns_setserver(0, &dns1Ip);
         DPRINTF("DNS1: %s\n", ipaddr_ntoa(&dns1Ip));
 
-        if (dns2 != NULL) {
+        if (dns2 != NULL && dns2[0] != '\0') {
           if ((dns2Ip.addr = ipaddr_addr(dns2)) == IPADDR_NONE) {
             DPRINTF("Error: Invalid DNS2 address.\n");
           } else {
@@ -993,4 +1016,32 @@ const char *network_getCyw43MacStr() {
            cyw43Mac[0], cyw43Mac[1], cyw43Mac[2], cyw43Mac[3], cyw43Mac[4],
            cyw43Mac[5]);
   return cyw43MacStr;
+}
+
+bool network_getCurrentRssi(int32_t *rssi) {
+  if (rssi == NULL) {
+    return false;
+  }
+  *rssi = 0;
+  if (!cyw43Initialized || wifiCurrentMode != WIFI_MODE_STA) {
+    return false;
+  }
+  int res = cyw43_wifi_get_rssi(&cyw43_state, rssi);
+  if (res != 0) {
+    DPRINTF("Failed to get RSSI: %d\n", res);
+    *rssi = 0;
+    return false;
+  }
+  return *rssi != 0;
+}
+
+const char *network_getSignalQualityLabel(int32_t rssi) {
+  if (rssi >= -30) return "Excellent";
+  if (rssi >= -40) return "Very good";
+  if (rssi >= -50) return "Good";
+  if (rssi >= -60) return "OK";
+  if (rssi >= -67) return "Fair";
+  if (rssi >= -70) return "Weak";
+  if (rssi >= -80) return "Very weak";
+  return "Unusable";
 }

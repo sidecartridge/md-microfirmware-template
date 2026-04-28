@@ -287,6 +287,30 @@ wifi_network_info_t network_getCurrentNetworkInfo();
 const char* network_getCyw43MacStr();
 
 /**
+ * @brief Retrieves the current RSSI for the STA connection.
+ *
+ * Reads the live RSSI from the CYW43 radio. Distinguishes "couldn't read"
+ * from "RSSI happens to be 0" by returning false instead of writing zero
+ * to the out-parameter.
+ *
+ * @param rssi Output pointer for the RSSI value (dBm).
+ * @return true if a valid RSSI was retrieved, false otherwise.
+ */
+bool network_getCurrentRssi(int32_t* rssi);
+
+/**
+ * @brief Maps an RSSI value to a user-friendly quality label.
+ *
+ * Buckets the dBm reading into "Excellent", "Very good", "Good", "OK",
+ * "Fair", "Weak", "Very weak", or "Unusable". Useful for the setup
+ * terminal screen so users get a one-glance view of signal quality.
+ *
+ * @param rssi RSSI in dBm.
+ * @return Pointer to a static label string.
+ */
+const char* network_getSignalQualityLabel(int32_t rssi);
+
+/**
  * @brief Returns the current MCU architecture string.
  *
  * @return "RP2040", "RP2350", or "UNKNOWN".
