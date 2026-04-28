@@ -128,6 +128,13 @@ typedef void (*ProtocolCallback)(const TransmissionProtocol *);
 typedef void (*ProtocolChecksumErrorCallback)(const TransmissionProtocol *);
 
 // Shared parser state lives in tprotocol.c.
+//
+// IMPORTANT: tprotocol_parse() mutates this state and is NOT re-entrant.
+// chandler is the only caller (via chandler_consume_rom3_sample). Do not
+// invoke tprotocol_parse from any other module — feeding two
+// independent streams of samples through the same parser will corrupt
+// the in-progress command and silently drop frames. New transports
+// should add their own parser instance, not share this one.
 extern uint32_t tprotocol_last_header_found;
 extern uint32_t tprotocol_new_header_found;
 extern TPParseStep tprotocol_nextTPstep;

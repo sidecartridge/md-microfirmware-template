@@ -68,11 +68,14 @@ _conterm			equ $484	; Conterm device number
 ; Constants needed for the commands
 RANDOM_TOKEN_ADDR:        equ (CMD_MAGIC_SENTINEL_ADDR + 4)  ; $FA2004
 RANDOM_TOKEN_SEED_ADDR:   equ (RANDOM_TOKEN_ADDR + 4)        ; $FA2008
+; $FA200C: 4-byte slot reserved for future framework use. chandler_init
+; zeroes it at boot; apps must not write here.
+RESERVED_SLOT_ADDR:       equ (RANDOM_TOKEN_SEED_ADDR + 4)   ; $FA200C
 RANDOM_TOKEN_POST_WAIT:   equ $1                             ; Wait cycles after the RNG is ready
 COMMAND_TIMEOUT           equ $0000FFFF                      ; Timeout for the command
 COMMAND_WRITE_TIMEOUT     equ COMMAND_TIMEOUT                ; Timeout for write commands
 
-SHARED_VARIABLES:         equ (RANDOM_TOKEN_SEED_ADDR + 8)   ; $FA2010 (60 indexed 4-byte slots)
+SHARED_VARIABLES:         equ (RESERVED_SLOT_ADDR + 4)       ; $FA2010 (60 indexed 4-byte slots)
 
 ROMCMD_START_ADDR:        equ $FB0000					  ; We are going to use ROM3 address
 CMD_MAGIC_NUMBER    	  equ ($ABCD) 					  ; Magic number header to identify a command
@@ -180,6 +183,11 @@ check_commands		macro
 	section
 
 ;Rom cartridge
+; The cartridge image (header + code below) MUST fit in
+; CARTRIDGE_CODE_SIZE = $2000 (8 KB). The hard limit is enforced by
+; target/atarist/build.sh after vlink emits BOOT.BIN; any direct vasm /
+; vlink invocation that bypasses the build script is unchecked, so keep
+; an eye on BOOT.BIN's size when iterating outside ./build.sh.
 
 	org ROM4_ADDR
 

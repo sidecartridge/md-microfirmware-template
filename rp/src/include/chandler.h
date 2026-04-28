@@ -56,7 +56,10 @@
 #define CHANDLER_CMD_SENTINEL_OFFSET       CHANDLER_SHARED_BLOCK_OFFSET
 #define CHANDLER_RANDOM_TOKEN_OFFSET       (CHANDLER_CMD_SENTINEL_OFFSET + 4)
 #define CHANDLER_RANDOM_TOKEN_SEED_OFFSET  (CHANDLER_RANDOM_TOKEN_OFFSET + 4)
-#define CHANDLER_SHARED_VARIABLES_OFFSET   (CHANDLER_RANDOM_TOKEN_SEED_OFFSET + 8)
+/* 4-byte slot reserved for future framework use. chandler_init zeroes
+ * it at boot; apps must not write here. */
+#define CHANDLER_RESERVED_OFFSET           (CHANDLER_RANDOM_TOKEN_SEED_OFFSET + 4)
+#define CHANDLER_SHARED_VARIABLES_OFFSET   (CHANDLER_RESERVED_OFFSET + 4)
 #define CHANDLER_SHARED_VARIABLES_SLOTS    60  /* 240 bytes total */
 #define CHANDLER_APP_BUFFERS_OFFSET                                            \
   (CHANDLER_SHARED_VARIABLES_OFFSET + (CHANDLER_SHARED_VARIABLES_SLOTS * 4))
@@ -77,6 +80,11 @@
 #define CHANDLER_HARDWARE_TYPE 0
 #define CHANDLER_SVERSION 1
 #define CHANDLER_BUFFER_TYPE 2
+
+// Maximum number of command callbacks that may be registered with
+// chandler_addCB. Pick a small bound so a buggy app cannot leak
+// unbounded malloc() allocations through repeated registration.
+#define CHANDLER_MAX_CALLBACKS 16
 
 // Callback function type
 typedef void (*CommandCallback)(TransmissionProtocol *protocol,

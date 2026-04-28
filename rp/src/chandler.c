@@ -23,8 +23,10 @@ static uint32_t incrementalCmdCount = 0;
 // send_sync poll wakes up).
 static uint32_t memoryRandomTokenAddress = 0;
 
-// Head of the callback list
+// Head of the callback list and current count (capped at
+// CHANDLER_MAX_CALLBACKS).
 static CommandCallbackNode *callbackListHead = NULL;
+static unsigned int callbackListCount = 0;
 
 static inline void __not_in_flash_func(chandler_clear_pending_protocol)(void) {
   pendingProtocol.command_id = 0;
@@ -68,6 +70,10 @@ void __not_in_flash_func(chandler_init)() {
   TPROTO_SET_RANDOM_TOKEN(shared_base + CHANDLER_RANDOM_TOKEN_SEED_OFFSET,
                           seed ^ 0xDEADBEEFu);
 
+  // Zero the reserved 4-byte slot so apps can rely on a known initial
+  // value if the framework later claims it for something concrete.
+  *((volatile uint32_t *)(shared_base + CHANDLER_RESERVED_OFFSET)) = 0;
+
   chandler_clear_pending_protocol();
 }
 
@@ -80,6 +86,20 @@ void __not_in_flash_func(chandler_init)() {
  */
 void __not_in_flash_func(chandler_addCB)(CommandCallback cb) {
   if (!cb) return;
+  if (callbackListCount >= CHANDLER_MAX_CALLBACKS) {
+    DPRINTF("chandler_addCB: callback list full (cap=%u), refusing %p\n",
+            (unsigned)CHANDLER_MAX_CALLBACKS, (void *)cb);
+    return;
+  }
+  // Reject duplicates so accidental double-registration doesn't double-
+  // dispatch every command (and doesn't waste a slot).
+  for (CommandCallbackNode *cur = callbackListHead; cur; cur = cur->next) {
+    if (cur->cb == cb) {
+      DPRINTF("chandler_addCB: %p already registered, ignoring\n",
+              (void *)cb);
+      return;
+    }
+  }
   CommandCallbackNode *node = malloc(sizeof(*node));
   if (!node) return;
   node->cb = cb;
@@ -91,6 +111,7 @@ void __not_in_flash_func(chandler_addCB)(CommandCallback cb) {
     while (cur->next) cur = cur->next;
     cur->next = node;
   }
+  callbackListCount++;
 }
 
 static inline void __not_in_flash_func(handle_protocol_command)(
