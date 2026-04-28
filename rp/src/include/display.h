@@ -60,14 +60,15 @@
 #define DISPLAY_RESET_WAIT_MESSAGE "Resetting the computer"
 #define DISPLAY_RESET_FORCE_MESSAGE "Reset manually if it doesn't boot."
 
-// Display buffer offset
-#define DISPLAY_BUFFER_OFFSET 0x8000
+// Display offsets are derived from the shared-region layout owned by
+// chandler.h. The framebuffer sits at the top of the 64 KB region; the
+// command sentinel and the high-res translation table both live in the
+// shared block at the bottom of the region.
+#include "chandler.h"
 
-// Commands offset. BUFFER_OFFSET + ADDRESS_OFFSET
-#define DISPLAY_COMMAND_ADDRESS_OFFSET 8000
-
-// Highres translate table offset: BUFFER_OFFSET + TRANSTABLE_OFFSET
-#define DISPLAY_HIGHRES_TRANSTABLE_OFFSET 0x1000
+#define DISPLAY_BUFFER_OFFSET           CHANDLER_FRAMEBUFFER_OFFSET
+#define DISPLAY_COMMAND_ADDRESS         CHANDLER_CMD_SENTINEL_OFFSET
+#define DISPLAY_HIGHRES_TRANSTABLE_ADDR CHANDLER_APP_BUFFERS_OFFSET
 
 // Commands sent to the active loop in the display terminal application
 #define DISPLAY_COMMAND_NOP 0x0       // Do nothing, clean the command buffer

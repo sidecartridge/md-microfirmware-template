@@ -18,26 +18,10 @@
 #define ROM4_GPIO 22
 #endif
 
-// Use the highest 4K of the shared memory for the terminal commands
-#define TERM_RANDOM_TOKEN_OFFSET \
-  0xF000  // Random token offset in the shared memory
-#define TERM_RANDON_TOKEN_SEED_OFFSET \
-  (TERM_RANDOM_TOKEN_OFFSET +         \
-   4)  // Random token seed offset in the shared memory: 0xF004
-
-// Size of the shared variables of the shared functions
-#define SHARED_VARIABLE_SHARED_FUNCTIONS_SIZE \
-  16  // Leave a gap for the shared variables of the shared functions
-
-// The shared variables are located in the + 0x200 offset
-#define TERM_SHARED_VARIABLES_OFFSET        \
-  (TERM_RANDOM_TOKEN_OFFSET +               \
-   (SHARED_VARIABLE_SHARED_FUNCTIONS_SIZE * \
-    4))  // Shared variables offset in the shared memory: 0xF000 + (16 * 4)
-
-// Shared variables for common use. Must be set in the init function
-#define TERM_HARDWARE_TYPE (0)     // Hardware type. 0xF200
-#define TERM_HARDWARE_VERSION (1)  // Hardware version.  0xF204
+// Random-token publish and shared-variable layout are owned by chandler
+// (see CHANDLER_RANDOM_TOKEN_OFFSET / CHANDLER_SHARED_VARIABLES_OFFSET in
+// chandler.h). The previous TERM_*_OFFSET / TERM_HARDWARE_* defines were
+// removed when chandler took over.
 
 // App commands for the terminal
 #define APP_TERMINAL 0x00  // The terminal app

@@ -24,14 +24,33 @@
 ; bit 31: TTP
 
 ROM4_ADDR			equ $FA0000
-FRAMEBUFFER_ADDR	equ $FA8000
-FRAMEBUFFER_SIZE 	equ 8000	; 8Kbytes of a 320x200 monochrome screen
+
+; Shared 64 KB region layout (must match rp/src/include/chandler.h).
+;
+;   $FA0000  CARTRIDGE			m68k header + code (max 8 KB)
+;   $FA2000  CMD_MAGIC_SENTINEL_ADDR	4 B
+;   $FA2004  RANDOM_TOKEN_ADDR		4 B
+;   $FA2008  RANDOM_TOKEN_SEED_ADDR	4 B
+;   $FA200C  reserved			4 B
+;   $FA2010  SHARED_VARIABLES		240 B (60 x 4-byte slots)
+;   $FA2100  APP_BUFFERS_ADDR	       ~48 KB free arena (TRANSTABLE etc.)
+;   $FAE0C0  FRAMEBUFFER_ADDR		8000 B (320x200 mono, at the top)
+;   $FAFFFF  end of region
+
+CARTRIDGE_CODE_SIZE	equ $2000	; 8 KB max for cartridge header + code
+SHARED_BLOCK_ADDR	equ (ROM4_ADDR + CARTRIDGE_CODE_SIZE)		; $FA2000
+CMD_MAGIC_SENTINEL_ADDR	equ SHARED_BLOCK_ADDR				; $FA2000
+
+FRAMEBUFFER_SIZE	equ 8000	; 8000 bytes of a 320x200 monochrome screen
+FRAMEBUFFER_ADDR	equ (ROM4_ADDR + $10000 - FRAMEBUFFER_SIZE)	; $FAE040
+APP_BUFFERS_ADDR	equ (SHARED_BLOCK_ADDR + $100)			; $FA2100
+TRANSTABLE		equ APP_BUFFERS_ADDR				; high-res translation table
+
 SCREEN_SIZE			equ (-4096)	; Use the memory before the screen memory to store the copied code
 COLS_HIGH			equ 20		; 16 bit columns in the ST
 ROWS_HIGH			equ 200		; 200 rows in the ST
 BYTES_ROW_HIGH		equ 80		; 80 bytes per row in the ST
 PRE_RESET_WAIT		equ $FFFFF
-TRANSTABLE			equ $FA1000	; Translation table for high resolution
 
 ; If 1, the display will not use the framebuffer and will write directly to the
 ; display memory. This is useful to reduce the memory usage in the rp2040
@@ -47,13 +66,13 @@ _conterm			equ $484	; Conterm device number
 
 
 ; Constants needed for the commands
-RANDOM_TOKEN_ADDR:        equ (ROM4_ADDR + $F000) 	      ; Random token address at $FAF000
-RANDOM_TOKEN_SEED_ADDR:   equ (RANDOM_TOKEN_ADDR + 4) 	  ; RANDOM_TOKEN_ADDR + 4 bytes
-RANDOM_TOKEN_POST_WAIT:   equ $1        		      	  ; Wait this cycles after the random number generator is ready
-COMMAND_TIMEOUT           equ $0000FFFF                   ; Timeout for the command
-COMMAND_WRITE_TIMEOUT     equ COMMAND_TIMEOUT              ; Timeout for write commands (separate so apps can extend it for large payloads)
+RANDOM_TOKEN_ADDR:        equ (CMD_MAGIC_SENTINEL_ADDR + 4)  ; $FA2004
+RANDOM_TOKEN_SEED_ADDR:   equ (RANDOM_TOKEN_ADDR + 4)        ; $FA2008
+RANDOM_TOKEN_POST_WAIT:   equ $1                             ; Wait cycles after the RNG is ready
+COMMAND_TIMEOUT           equ $0000FFFF                      ; Timeout for the command
+COMMAND_WRITE_TIMEOUT     equ COMMAND_TIMEOUT                ; Timeout for write commands
 
-SHARED_VARIABLES:     	  equ (RANDOM_TOKEN_ADDR + $200)  ; random token + 512 bytes to the shared variables area: $FAF200
+SHARED_VARIABLES:         equ (RANDOM_TOKEN_SEED_ADDR + 8)   ; $FA2010 (60 indexed 4-byte slots)
 
 ROMCMD_START_ADDR:        equ $FB0000					  ; We are going to use ROM3 address
 CMD_MAGIC_NUMBER    	  equ ($ABCD) 					  ; Magic number header to identify a command
@@ -138,7 +157,7 @@ check_keys			macro
 					endm
 
 check_commands		macro
-					move.l (FRAMEBUFFER_ADDR + FRAMEBUFFER_SIZE), d6	; Store in the D6 register the remote command value
+					move.l CMD_MAGIC_SENTINEL_ADDR, d6	; Store in the D6 register the remote command value
 					cmp.l #CMD_TERMINAL, d6		; Check if the command is a terminal command
 					bne.s .\@check_reset
 

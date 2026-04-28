@@ -120,10 +120,9 @@ void display_setupU8g2() {
   setDisplayAddress((unsigned int)&__rom_in_ram_start__ +
                     DISPLAY_BUFFER_OFFSET);
   setDisplayCommandAddress((unsigned int)&__rom_in_ram_start__ +
-                           DISPLAY_BUFFER_OFFSET +
-                           DISPLAY_COMMAND_ADDRESS_OFFSET);
+                           DISPLAY_COMMAND_ADDRESS);
   setDisplaysHighresTranstableAddress((unsigned int)&__rom_in_ram_start__ +
-                                      DISPLAY_HIGHRES_TRANSTABLE_OFFSET);
+                                      DISPLAY_HIGHRES_TRANSTABLE_ADDR);
   DPRINTF("Display buffer address: 0x%08x\n", (unsigned int)u8g2Buffer);
   DPRINTF("Display command address: 0x%08x\n", display_getCommandAddress());
   DPRINTF("Highres translation table address: 0x%08x\n",

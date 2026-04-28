@@ -18,9 +18,10 @@ static bool protocolPending = false;
 
 static uint32_t incrementalCmdCount = 0;
 
-static uint32_t memorySharedAddress = 0;
+// Address of the random-token reply slot (chandler_loop publishes the
+// 64-bit { incrementalCmdCount | randomToken } value here so the m68k's
+// send_sync poll wakes up).
 static uint32_t memoryRandomTokenAddress = 0;
-static uint32_t memoryRandomTokenSeedAddress = 0;
 
 // Head of the callback list
 static CommandCallbackNode *callbackListHead = NULL;
@@ -51,10 +52,22 @@ static inline bool __not_in_flash_func(chandler_protocol_matches_pending)(
 void __not_in_flash_func(chandler_init)() {
   DPRINTF("Initializing Command Handler...\n");
 
-  memorySharedAddress = (unsigned int)&__rom_in_ram_start__;
-  memoryRandomTokenAddress = memorySharedAddress + CHANDLER_RANDOM_TOKEN_OFFSET;
-  memoryRandomTokenSeedAddress =
-      memorySharedAddress + CHANDLER_RANDOM_TOKEN_SEED_OFFSET;
+  uint32_t shared_base = (unsigned int)&__rom_in_ram_start__;
+  memoryRandomTokenAddress = shared_base + CHANDLER_RANDOM_TOKEN_OFFSET;
+
+  // Seed the random-token slots with non-zero values before the first
+  // m68k command runs. send_sync_command_to_sidecart reads
+  // RANDOM_TOKEN_SEED_ADDR to derive its request token; on a cold boot
+  // that slot would otherwise be whatever the RP RAM happened to contain.
+  uint64_t boot_us = time_us_64();
+  uint32_t seed = (uint32_t)(boot_us ^ (boot_us >> 32));
+  if (seed == 0) {
+    seed = 0xA1F0C0DEu;
+  }
+  TPROTO_SET_RANDOM_TOKEN(memoryRandomTokenAddress, seed);
+  TPROTO_SET_RANDOM_TOKEN(shared_base + CHANDLER_RANDOM_TOKEN_SEED_OFFSET,
+                          seed ^ 0xDEADBEEFu);
+
   chandler_clear_pending_protocol();
 }
 

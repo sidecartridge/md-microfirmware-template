@@ -20,7 +20,6 @@
 #include "debug.h"
 #include "display.h"
 #include "display_term.h"
-#include "hardware/sync.h"
 #include "gconfig.h"
 #include "memfunc.h"
 #include "network.h"
@@ -30,15 +29,14 @@
 #include "select.h"
 #include "tprotocol.h"
 
+// Producer (term_command_cb, called from chandler_loop) and consumer
+// (term_loop) both run sequentially on core 0, so the double-buffer swap
+// doesn't need volatile or an IRQ-disable critical section.
 static TransmissionProtocol protocolBuffers[2];
-static volatile uint8_t protocolReadIndex = 0;
-static volatile uint8_t protocolWriteIndex = 1;
-static volatile bool protocolBufferReady = false;
-static volatile uint32_t protocolOverwriteCount = 0;
-
-static uint32_t memorySharedAddress = 0;
-static uint32_t memoryRandomTokenAddress = 0;
-static uint32_t memoryRandomTokenSeedAddress = 0;
+static uint8_t protocolReadIndex = 0;
+static uint8_t protocolWriteIndex = 1;
+static bool protocolBufferReady = false;
+static uint32_t protocolOverwriteCount = 0;
 
 #define TERM_NETWORK_INFO_VALUE_SIZE 64
 #define TERM_MENU_LIVE_LINE_MAX 128
@@ -509,21 +507,9 @@ static void termInputChar(char chr) {
 }
 
 void term_init(void) {
-  // Memory shared address
-  memorySharedAddress = (unsigned int)&__rom_in_ram_start__;
-  memoryRandomTokenAddress = memorySharedAddress + TERM_RANDOM_TOKEN_OFFSET;
-  memoryRandomTokenSeedAddress =
-      memorySharedAddress + TERM_RANDON_TOKEN_SEED_OFFSET;
-  SET_SHARED_VAR(TERM_HARDWARE_TYPE, 0, memorySharedAddress,
-                 TERM_SHARED_VARIABLES_OFFSET);  // Clean the hardware type
-  SET_SHARED_VAR(TERM_HARDWARE_VERSION, 0, memorySharedAddress,
-                 TERM_SHARED_VARIABLES_OFFSET);  // Clean the hardware version
-
-  // Initialize the random seed (add this line)
-  srand(time(NULL));
-  // Init the random token seed in the shared memory for the next command
-  uint32_t newRandomSeedToken = rand();  // Generate a new random 32-bit value
-  TPROTO_SET_RANDOM_TOKEN(memoryRandomTokenSeedAddress, newRandomSeedToken);
+  // Random-token publish, seed init, and shared-variable bookkeeping moved
+  // to chandler (chandler_init / chandler_loop). term_init only handles
+  // terminal display state now.
 
   // Initialize the welcome messages
   term_clearScreen();
@@ -564,17 +550,14 @@ void __not_in_flash_func(term_loop)() {
   bool protocolReady = false;
   uint32_t overwriteCountSnapshot = 0;
 
-  // Minimal critical section: atomically snapshot the latest published slot.
-  // Easy to revert if we switch to a queue/ring-buffer approach later.
-  uint32_t irqState = save_and_disable_interrupts();
+  // Snapshot the latest published slot. Producer and consumer are both
+  // on core 0 and never re-enter, so no critical section is needed.
   if (protocolBufferReady) {
-    uint8_t readIndex = protocolReadIndex;
-    protocolSnapshot = protocolBuffers[readIndex];
+    protocolSnapshot = protocolBuffers[protocolReadIndex];
     protocolBufferReady = false;
     protocolReady = true;
   }
   overwriteCountSnapshot = protocolOverwriteCount;
-  restore_interrupts(irqState);
 
   if (protocolReady) {
     // Shared by all commands
@@ -663,15 +646,8 @@ void __not_in_flash_func(term_loop)() {
         DPRINTF("Unknown command\n");
         break;
     }
-    if (memoryRandomTokenAddress != 0) {
-      // Set the random token in the shared memory
-      TPROTO_SET_RANDOM_TOKEN(memoryRandomTokenAddress, randomToken);
-
-      // Init the random token seed in the shared memory for the next command
-      uint32_t newRandomSeedToken =
-          rand();  // Generate a new random 32-bit value
-      TPROTO_SET_RANDOM_TOKEN(memoryRandomTokenSeedAddress, newRandomSeedToken);
-    }
+    // Random-token publish is owned by chandler_loop; nothing more to do here.
+    (void)randomToken;
   }
 }
 
