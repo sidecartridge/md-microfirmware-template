@@ -39,8 +39,10 @@ BIN = BOOT.BIN
 # To disable debug, make target DEBUG_MODE=0
 DEBUG_MODE = 1
 VASMFLAGS=-Faout -quiet -x -m68000 -spaces -showopt -devpac -D_DEBUG=$(DEBUG_MODE) -DGEMDOS_DATE=$(GEMDOS_DATE_FORMATTED) -DGEMDOS_TIME=$(GEMDOS_TIME_FORMATTED) -DVERSION_MAJOR=\"$(VERSION_MAJOR)\" -DVERSION_MINOR=\"$(VERSION_MINOR)\" -DVERSION_PATCH=\"$(VERSION_PATCH)\"
-VASM = vasm 
+VASM = vasm
 VLINK =  vlink
+LINKER_SCRIPT = $(SOURCES_DIR)/userfw.ld
+VLINKFLAGS = -brawbin1 -T $(LINKER_SCRIPT)
 
 .PHONY: all
 all: prepare dist
@@ -52,14 +54,17 @@ release: prepare dist
 prepare: clean
 	mkdir -p $(BUILD_DIR)
 
-clean-compile : clean main.o
+clean-compile : clean main.o userfw.o
 
 main.o: prepare
 	$(VASM) $(VASMFLAGS) $(SOURCES_DIR)/main.s -o $(BUILD_DIR)/main.o
 
+userfw.o: prepare
+	$(VASM) $(VASMFLAGS) $(SOURCES_DIR)/userfw.s -o $(BUILD_DIR)/userfw.o
+
 .PHONY: build
-build: main.o
-	$(VLINK) $(BUILD_DIR)/$^ -brawbin1 -o $(BUILD_DIR)/$(BIN)
+build: main.o userfw.o
+	$(VLINK) $(addprefix $(BUILD_DIR)/,$^) $(VLINKFLAGS) -o $(BUILD_DIR)/$(BIN)
 
 
 .PHONY: dist

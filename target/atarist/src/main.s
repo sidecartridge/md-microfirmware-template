@@ -46,6 +46,12 @@ FRAMEBUFFER_ADDR	equ (ROM4_ADDR + $10000 - FRAMEBUFFER_SIZE)	; $FAE040
 APP_BUFFERS_ADDR	equ (SHARED_BLOCK_ADDR + $100)			; $FA2100
 TRANSTABLE		equ APP_BUFFERS_ADDR				; high-res translation table
 
+; User firmware entry point. The cartridge image places userfw.s at
+; offset $0800 of BOOT.BIN via target/atarist/src/userfw.ld; main.s
+; gets the first 2 KB ($0000..$07FF), userfw gets the next 6 KB
+; ($0800..$1FFF). The CARTRIDGE_CODE_SIZE = 8 KB cap covers both.
+USERFW			equ (ROM4_ADDR + $800)				; $FA0800
+
 SCREEN_SIZE			equ (-4096)	; Use the memory before the screen memory to store the copied code
 COLS_HIGH			equ 20		; 16 bit columns in the ST
 ROWS_HIGH			equ 200		; 200 rows in the ST
@@ -61,6 +67,7 @@ CMD_NOP				equ 0		; No operation command
 CMD_RESET			equ 1		; Reset command
 CMD_BOOT_GEM		equ 2		; Boot GEM command
 CMD_TERMINAL		equ 3		; Terminal command
+CMD_START			equ 4		; Hand control to the user firmware (USERFW)
 
 _conterm			equ $484	; Conterm device number
 
@@ -172,6 +179,8 @@ check_commands		macro
 					beq .reset					; If it is, reset the computer
 					cmp.l #CMD_BOOT_GEM, d6		; Check if the command is to boot GEM
 					beq boot_gem				; If it is, boot GEM
+					cmp.l #CMD_START, d6		; Check if the command hands over to USERFW
+					beq rom_function			; If it is, jump to the user firmware dispatcher
 
 					; If we are here, the command is a NOP
 					; If the command is a NOP, check the shift keys to bypass the command
@@ -318,6 +327,16 @@ start_rom_code:
 boot_gem:
 	; If we get here, continue loading GEM
     rts
+
+; Dispatcher for the user firmware module. Reached on CMD_START via the
+; sentinel poll in check_commands. The cartridge image places userfw.s
+; at offset $0800 (USERFW = $FA0800) through target/atarist/src/userfw.ld;
+; main.s simply hands control over with a one-way jmp. Apps that want
+; to chain multiple modules can change this to a sequence of jsr / jmp
+; the same way md-drives-emulator's rom_function dispatches into
+; GEMDRIVE/FLOPPYEMUL/ACSIEMUL/RTCEMUL.
+rom_function:
+    jmp USERFW
 
 ; Shared functions included at the end of the file
 ; Don't forget to include the macros for the shared functions at the top of file
