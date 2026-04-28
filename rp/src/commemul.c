@@ -28,9 +28,9 @@ static int commSm = -1;
 static bool commInitialized = false;
 static PIO commPio = pio0;
 
-void commemul_init(void) {
+int commemul_init(void) {
   if (commInitialized) {
-    return;
+    return 0;
   }
 
   for (int i = 0; i < READ_ADDR_PIN_COUNT; i++) {
@@ -45,11 +45,15 @@ void commemul_init(void) {
   gpio_set_pulls(ROM3_GPIO, true, false);
   gpio_pull_up(ROM3_GPIO);
 
-  uint offset = pio_add_program(commPio, &commemul_read_program);
+  int offset = pio_add_program(commPio, &commemul_read_program);
+  if (offset < 0) {
+    DPRINTF("commemul_init: pio_add_program failed (%d)\n", offset);
+    return -1;
+  }
   commSm = pio_claim_unused_sm(commPio, true);
-  commemul_read_program_init(commPio, commSm, offset, READ_ADDR_GPIO_BASE,
-                             READ_ADDR_PIN_COUNT, READ_SIGNAL_GPIO_BASE,
-                             SAMPLE_DIV_FREQ);
+  commemul_read_program_init(commPio, commSm, (uint)offset,
+                             READ_ADDR_GPIO_BASE, READ_ADDR_PIN_COUNT,
+                             READ_SIGNAL_GPIO_BASE, SAMPLE_DIV_FREQ);
 
   pio_sm_set_enabled(commPio, commSm, false);
   pio_sm_clear_fifos(commPio, commSm);
@@ -76,6 +80,7 @@ void commemul_init(void) {
           "bytes)\n",
           commSm, commDmaChannel, (unsigned int)COMM_RING_WORDS,
           (unsigned int)COMM_RING_SIZE_BYTES);
+  return 0;
 }
 
 void __not_in_flash_func(commemul_poll)(CommEmulSampleCallback callback) {

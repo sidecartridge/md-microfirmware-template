@@ -316,12 +316,21 @@ void emul_start() {
 
   // Initialize the cartridge ROM4 read engine. ROM4 reads are served entirely
   // by chained DMAs feeding the PIO TX FIFO — no CPU/IRQ involvement.
-  init_romemul(false);
+  // Without this engine the cartridge image is unreadable from the m68k,
+  // so a failure here is fatal: panic instead of stumbling on with a half-
+  // configured PIO/DMA setup.
+  if (init_romemul(false) < 0) {
+    panic("init_romemul failed: PIO/DMA claim or program load returned <0");
+  }
 
   // Bring up the ROM3 command capture (PIO + DMA ring on GPIO 26) and the
   // command handler that polls the ring, parses the protocol, and dispatches
-  // each command to the registered callbacks.
-  commemul_init();
+  // each command to the registered callbacks. commemul is similarly load-
+  // bearing — without it the m68k can issue commands but the RP never sees
+  // them, so any non-OK return is fatal.
+  if (commemul_init() < 0) {
+    panic("commemul_init failed: PIO/DMA claim or program load returned <0");
+  }
   chandler_init();
   chandler_addCB(term_command_cb);
 
