@@ -16,7 +16,10 @@
 
 #define SELECT_LOOP_DELAY 10  // 10 ms
 
-#define SELECT_DEBOUNCE_DELAY 20  // 20 ms
+// Window of stable level required before accepting a press/release. The
+// debouncer polls every SELECT_LOOP_DELAY and requires SELECT_DEBOUNCE_MS
+// of consistent readings before returning true.
+#define SELECT_DEBOUNCE_MS 30
 
 #define SELECT_LONG_RESET 10000  // 10 seconds
 

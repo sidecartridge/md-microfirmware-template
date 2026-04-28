@@ -7,11 +7,22 @@ static bool selectPressedLatched = false;
 static absolute_time_t selectPressStartTime;
 static bool selectLongPressDetected = false;
 
+// Stronger debouncer ported from md-drives-emulator: poll the button
+// every SELECT_LOOP_DELAY ms and require SELECT_DEBOUNCE_MS of
+// continuously matching samples before accepting the state. Replaces a
+// 2-sample debouncer that could be fooled by a single bouncing edge
+// during the 20 ms window.
 static bool select_detectStableState(bool expectedState) {
-  bool firstSample = select_detectPush();
-  sleep_ms(SELECT_DEBOUNCE_DELAY);
-  bool secondSample = select_detectPush();
-  return ((firstSample == expectedState) && (secondSample == expectedState));
+  uint32_t stable_ms = 0;
+  while (stable_ms < SELECT_DEBOUNCE_MS) {
+    if (select_detectPush() != expectedState) {
+      return false;
+    }
+    tight_loop_contents();
+    sleep_ms(SELECT_LOOP_DELAY);
+    stable_ms += SELECT_LOOP_DELAY;
+  }
+  return true;
 }
 
 static uint32_t select_getPressDurationMs(void) {

@@ -23,6 +23,12 @@ typedef enum {
 
 #define SDCARD_KILOBAUD 1000
 
+// Bounds enforced by sdcard_setSpiSpeedSettings() so a malformed
+// PARAM_SD_BAUD_RATE_KB cannot drive SPI faster than the hardware can
+// sustain or slower than is practically useful.
+#define SDCARD_MAX_KHZ 24000  // 24 MHz upper bound
+#define SDCARD_MIN_KHZ 1000   // 1 MHz  lower bound
+
 #define NUM_BYTES_PER_SECTOR 512
 #define SDCARD_MEGABYTE 1048576
 
@@ -61,6 +67,21 @@ bool sdcard_dirExist(const char *dir);
  * @return sdcard_status_t Status code indicating the initialization result.
  */
 sdcard_status_t sdcard_initFilesystem(FATFS *fsPtr, const char *folderName);
+
+/**
+ * @brief Ensure a folder exists on the mounted filesystem.
+ *
+ * Creates the folder when it is missing. Empty folder names and the root
+ * (`"/"`) are treated as no-ops and return SDCARD_INIT_OK without
+ * touching the filesystem. Useful for apps that want their own
+ * subdirectory inside the SD card without re-running the full
+ * sdcard_initFilesystem flow.
+ *
+ * @param folderName Path of the folder to be created or verified.
+ * @return sdcard_status_t SDCARD_INIT_OK on success (or no-op);
+ *         SDCARD_CREATE_FOLDER_ERROR if f_mkdir fails.
+ */
+sdcard_status_t sdcard_ensureFolder(const char *folderName);
 
 /**
  * @brief Adjust the SPI communication speed.
