@@ -153,8 +153,16 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
         PICO_TARGET_LINKER_SCRIPT ${CMAKE_CURRENT_LIST_DIR}/memmap_rp.ld
 )
 
+# Make our project-local FatFs config (rp/src/ff/ffconf.h) win over the
+# fatfs-sdk submodule's default copy. fatfs sources do `#include "ffconf.h"`
+# which is resolved against the include path; placing this BEFORE PRIVATE
+# guarantees our override is found first, so the submodule stays pristine
+# and no on-the-fly sed patching is needed.
+target_include_directories(${PROJECT_NAME} BEFORE PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/ff)
+
 # Needed to include lwipopts.h properly
-target_include_directories(${PROJECT_NAME} PRIVATE 
+target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/include
     ${CMAKE_CURRENT_LIST_DIR}/..)

@@ -25,7 +25,7 @@ Required host environment:
 Build flow (orchestrated by `build.sh`):
 1. Copies `version.txt` into `rp/` and `target/atarist/`.
 2. Builds the Atari ST target (`target/atarist/build.sh`) via `stcmd make`. Pads `BOOT.BIN` to 64 KB, then `firmware.py` converts it into `rp/src/include/target_firmware.h` (a C byte array embedded in the RP firmware).
-3. Builds the RP firmware (`rp/build.sh`): pins submodule versions (pico-sdk 2.2.0, pico-extras sdk-2.2.0, fatfs-sdk at a specific commit), patches `fatfs-sdk/src/include/ffconf.h` to enable `FF_USE_CHMOD`, runs CMake, produces `rp/dist/rp-<board>.uf2`.
+3. Builds the RP firmware (`rp/build.sh`): pins submodule versions (pico-sdk 2.2.0, pico-extras sdk-2.2.0, fatfs-sdk at a specific commit), runs CMake, produces `rp/dist/rp-<board>.uf2`. The FatFs configuration lives at `rp/src/ff/ffconf.h` and shadows the submodule's default via `target_include_directories(... BEFORE PRIVATE)` in `rp/src/CMakeLists.txt`, so the `fatfs-sdk` submodule stays pristine.
 4. Computes MD5, renames to `dist/<APP_UUID>-<VERSION>.uf2`, and substitutes UUID/MD5/version into `dist/<APP_UUID>.json` from the `desc/app.json` template.
 
 ### Build gotchas
@@ -82,7 +82,7 @@ The build assumes Core 0 owns flash writes (`PICO_FLASH_ASSUME_CORE0_SAFE=1`). T
 
 ## Editing guardrails
 
-- **Never modify** `pico-sdk/`, `pico-extras/`, or `fatfs-sdk/` — they are git submodules pinned to specific upstream revisions, and the build re-pins them on every run. The `fatfs-sdk` `ffconf.h` is patched in-place by `rp/build.sh`; don't commit that change.
+- **Never modify** `pico-sdk/`, `pico-extras/`, or `fatfs-sdk/` — they are git submodules pinned to specific upstream revisions, and the build re-pins them on every run. To change FatFs configuration, edit `rp/src/ff/ffconf.h` (project-owned override); the include path is set up so this file wins over the submodule's default.
 - Don't touch `main.c` for feature work — start in `emul.c`.
 - Match the existing C style (clang-format config in `.clang-format`, clang-tidy in `.clang-tidy` — both wired up via CMake when the binaries are on `PATH`).
 
@@ -130,3 +130,17 @@ Define success criteria. Loop until verified.
 - "Refactor X" → "Ensure tests pass before and after"
 
 For multi-step tasks, state a brief plan with a verification check per step.
+
+### 5. No AI attribution
+
+Never add AI-tool attribution to commits, PR descriptions, code comments,
+docs, or any other artifact. This means **no**:
+- "Generated with Claude Code", "Co-authored by Claude", "Made with ChatGPT",
+  or any similar phrasing.
+- `Co-Authored-By: Claude …`, `Co-Authored-By: ChatGPT …`, or any other
+  AI co-author trailer.
+- "AI-assisted", "written with the help of an LLM", etc., as comments or
+  changelog entries.
+
+Write the message as the human author. Do not mention AI tools used to
+produce the work.

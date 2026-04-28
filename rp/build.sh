@@ -24,9 +24,10 @@ cd fatfs-sdk
 git checkout 6bdb39f96fe8b897aff12bf3416e32515792e318
 cd ..
 
-# This is a dirty hack to guarantee that I can use the fatfs-sdk submodule
-echo "Patching the fatfs-sdk... to use chmod"
-sed -i.bak 's/#define FF_USE_CHMOD[[:space:]]*0/#define FF_USE_CHMOD 1/' fatfs-sdk/src/include/ffconf.h && mv fatfs-sdk/src/include/ffconf.h.bak .
+# FatFs configuration is overridden by rp/src/ff/ffconf.h; the CMake
+# include path puts that directory ahead of the submodule's default copy
+# so we no longer need to sed-patch the submodule on every build (which
+# left fatfs-sdk dirty and unrecordable in the parent commit).
 
 # Set the environment variables of the SDKs
 export PICO_SDK_PATH=$PWD/pico-sdk
