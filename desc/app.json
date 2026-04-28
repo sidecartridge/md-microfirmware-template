@@ -7,10 +7,10 @@
     "Sample",
   ],
   "devices": [
-    "Atari ST",
-    "Atari STE",
-    "Atari MegaST",
-    "Atari MegaSTE"
+    "ST",
+    "STE",
+    "MegaST",
+    "MegaSTE"
   ],
   "binary": "https://atarist.sidecartridge.com/<APP_UUID>-<APP_VERSION>.uf2",
   "md5": "<BINARY_MD5_HASH>",
