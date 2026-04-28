@@ -13,25 +13,25 @@
 ; main.s (RANDOM_TOKEN_ADDR, SHARED_VARIABLES, APP_FREE_ADDR, ...) are
 ; available here too via the include.
 ;
-; IMPORTANT: this stub ends with `rts`, which in the current main.s
-; flow returns to nowhere well-defined (rom_function uses `jmp`, not
-; `jsr`, so the stack does not contain a valid return). Apps that
-; replace this body should either loop forever, hand off via `jmp` to
-; another routine, or cooperate with main.s by adopting a `jsr` +
-; explicit return pattern. The stub is laid out this way so that a
-; cartridge image with the unmodified template still assembles and
-; links cleanly.
+; Demo: this stub prints "Example firmware load..." to the GEMDOS
+; console (which lands on the Atari ST screen) and returns. The
+; cartridge is reached after GEMDOS init (CA_INIT bit 27 set in
+; main.s's header), so the Cconws trap is safe to use here.
 
 	section text
 
-userfw:
-	; ── Replace from here ─────────────────────────────────────────────
-	;   Example: bump shared variable index 0 by 1 to prove the module
-	;   ran once.
-	;
-	;   move.l SHARED_VARIABLES, d0
-	;   addq.l #1, d0
-	;   move.l d0, SHARED_VARIABLES
-	; ── ...to here ────────────────────────────────────────────────────
+; GEMDOS Cconws: print null-terminated string to console.
+;   trap #1, function 9 (.w on stack), string ptr (.l on stack).
+GEMDOS_Cconws		equ 9
 
+userfw:
+	lea	hello_msg(pc), a0	; address of message
+	move.l	a0, -(sp)		; push string pointer
+	move.w	#GEMDOS_Cconws, -(sp)	; push function code
+	trap	#1			; call GEMDOS
+	addq.l	#6, sp			; clean up arguments
 	rts
+
+hello_msg:
+	dc.b	"Example firmware load...",13,10,0
+	even
