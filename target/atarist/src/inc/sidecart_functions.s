@@ -225,7 +225,10 @@ _start_sync_code_in_stack:
     moveq #0, d0                             ; No Timeout
 _start_sync_code_in_stack_loop:
     cmp.l (a1), d2                           ; Compare the random number with the token
-    beq.s _sync_token_found                  ; Token found, we can finish succesfully
+    bne.s _sync_token_not_ready
+    cmp.l RANDOM_TOKEN_SEED_ADDR, d2         ; Seed must advance to prove a real response
+    bne.s _sync_token_found                  ; Token found, we can finish succesfully
+_sync_token_not_ready:
     subq.l #1, d7                            ; Decrement the inner loop
     bne.s _start_sync_code_in_stack_loop     ; If the inner loop is not finished, continue
 
@@ -433,7 +436,10 @@ _start_sync_write_code_in_stack:
     moveq #0, d0                                   ; Timeout
 _start_sync_write_code_in_stack_loop:
     cmp.l (a1), d2                                 ; Compare the random number with the token
-    beq.s _sync_write_token_found                  ; Token found, we can finish succesfully
+    bne.s _sync_write_token_not_ready
+    cmp.l RANDOM_TOKEN_SEED_ADDR, d2               ; Seed must advance to prove a real response
+    bne.s _sync_write_token_found                  ; Token found, we can finish succesfully
+_sync_write_token_not_ready:
     subq.l #1, d6                                  ; Decrement the inner loop
     bne.s _start_sync_write_code_in_stack_loop     ; If the inner loop is not finished, continue
 
