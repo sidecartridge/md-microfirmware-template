@@ -180,6 +180,10 @@ void __not_in_flash_func(chandler_loop)() {
   }
 
   incrementalCmdCount++;
+  // 64-bit write: low 32b -> RANDOM_TOKEN (echoes request token), high 32b
+  // -> RANDOM_TOKEN_SEED (incrementalCmdCount). SEED MUST differ from the
+  // request token: the m68k waiter uses "SEED advanced" to distinguish a
+  // real reply from open-bus reads when no firmware is responding.
   TPROTO_SET_RANDOM_TOKEN64(
       memoryRandomTokenAddress,
       (((uint64_t)incrementalCmdCount) << 32) | randomToken);

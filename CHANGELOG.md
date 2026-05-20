@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.2.1 (2026-05-20) - release
+
+### Sync ack: no false positives on missing hardware
+
+The m68k `send_sync` / `send_sync_write` waiters previously ack'd a
+command as soon as `RANDOM_TOKEN == d2` (the token the m68k sent).
+That condition also holds when the cartridge is unplugged or the
+microfirmware is not running, because the bus returns the same
+open-bus / uninitialised value at both `RANDOM_TOKEN_ADDR` and
+`RANDOM_TOKEN_SEED_ADDR` — apps would proceed as if the device had
+replied.
+
+The waiter now additionally requires `RANDOM_TOKEN_SEED_ADDR` to have
+moved away from the value the m68k loaded at request time. The RP
+side already writes a strictly-incrementing `incrementalCmdCount` to
+the seed slot on every response, so a real reply always advances the
+seed; absent hardware leaves it equal to `d2` and the loop runs to
+timeout instead.
+
+RP-side `chandler.c` gains a comment documenting the
+SEED-must-advance invariant that the m68k waiter depends on.
+
+Thanks to @neilrackett (PR #5) for the fix.
+
+---
+
 ## v1.2.0 (2026-04-28) - release
 
 ### Shared 64 KB region rearranged
