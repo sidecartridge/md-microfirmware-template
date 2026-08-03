@@ -97,6 +97,16 @@ The build assumes Core 0 owns flash writes (`PICO_FLASH_ASSUME_CORE0_SAFE=1`). T
 ### App identity
 `CURRENT_APP_UUID_KEY` (set from the `APP_UUID_KEY` env var at CMake time, with a placeholder default) is the app's UUID4. It must match the `uuid` field in `desc/app.json` and is used as the key into `GLOBAL_LOOKUP_FLASH` to find this app's config sector. Mismatch → app jumps to Booster.
 
+## Publishing
+
+A successful build leaves three files in `dist/`: `<APP_UUID>-<VERSION>.uf2` (the firmware users install), `<APP_UUID>.json` (the app descriptor) and `rp.uf2.md5sum` (a byproduct; its hash is already inside the descriptor).
+
+The descriptor is generated, not hand-written. Edit `desc/app.json`: fill in `name`, `description`, `image`, `tags`, `devices` and `binary`, and **leave `<APP_UUID>`, `<APP_VERSION>` and `<BINARY_MD5_HASH>` as placeholders** because `build.sh` substitutes them on every run. Write the `binary` URL with those placeholders too, so it tracks the version across releases. `build.sh` aborts if `desc/app.json` is missing.
+
+Getting an app into the public catalogue that Booster downloads is **one pull request** against [`sidecartridge-microfirmwares-store`](https://github.com/sidecartridge/sidecartridge-microfirmwares-store), adding an origin that points at an `apps.json` you host yourself. The store keeps a pointer, not a copy, so later releases need no further pull request. Walkthrough: <https://md-store.sidecartridge.com/build/atari-st/11-get-listed.html>
+
+For an assistant that does not read this file automatically, the same guide publishes a portable copy of the architecture and the hard constraints at <https://md-store.sidecartridge.com/build/atari-st/context.md>. It supplements this file; where the two disagree, this file wins.
+
 ## Editing guardrails
 
 - **Never modify** `pico-sdk/`, `pico-extras/`, or `fatfs-sdk/` — they are git submodules pinned to specific upstream revisions, and the build re-pins them on every run. To change FatFs configuration, edit `rp/src/ff/ffconf.h` (project-owned override); the include path is set up so this file wins over the submodule's default.
