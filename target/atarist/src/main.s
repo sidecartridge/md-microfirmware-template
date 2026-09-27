@@ -23,35 +23,6 @@
 ; bit 30: TOS application .
 ; bit 31: TTP
 
-ROM4_ADDR			equ $FA0000
-
-; Shared 64 KB region layout (must match rp/src/include/chandler.h).
-;
-;   $FA0000  CARTRIDGE			m68k header + code (max 8 KB)
-;   $FA2000  CMD_MAGIC_SENTINEL_ADDR	4 B
-;   $FA2004  RANDOM_TOKEN_ADDR		4 B
-;   $FA2008  RANDOM_TOKEN_SEED_ADDR	4 B
-;   $FA200C  reserved			4 B
-;   $FA2010  SHARED_VARIABLES		240 B (60 x 4-byte slots)
-;   $FA2100  APP_BUFFERS_ADDR	       ~48 KB free arena (TRANSTABLE etc.)
-;   $FAE0C0  FRAMEBUFFER_ADDR		8000 B (320x200 mono, at the top)
-;   $FAFFFF  end of region
-
-CARTRIDGE_CODE_SIZE	equ $2000	; 8 KB max for cartridge header + code
-SHARED_BLOCK_ADDR	equ (ROM4_ADDR + CARTRIDGE_CODE_SIZE)		; $FA2000
-CMD_MAGIC_SENTINEL_ADDR	equ SHARED_BLOCK_ADDR				; $FA2000
-
-FRAMEBUFFER_SIZE	equ 8000	; 8000 bytes of a 320x200 monochrome screen
-FRAMEBUFFER_ADDR	equ (ROM4_ADDR + $10000 - FRAMEBUFFER_SIZE)	; $FAE040
-APP_BUFFERS_ADDR	equ (SHARED_BLOCK_ADDR + $100)			; $FA2100
-TRANSTABLE		equ APP_BUFFERS_ADDR				; high-res translation table
-
-; User firmware entry point. The cartridge image places userfw.s at
-; offset $0800 of BOOT.BIN via target/atarist/src/userfw.ld; main.s
-; gets the first 2 KB ($0000..$07FF), userfw gets the next 6 KB
-; ($0800..$1FFF). The CARTRIDGE_CODE_SIZE = 8 KB cap covers both.
-USERFW			equ (ROM4_ADDR + $800)				; $FA0800
-
 SCREEN_SIZE			equ (-4096)	; Use the memory before the screen memory to store the copied code
 COLS_HIGH			equ 20		; 16 bit columns in the ST
 ROWS_HIGH			equ 200		; 200 rows in the ST
@@ -71,24 +42,6 @@ CMD_START			equ 4		; Hand control to the user firmware (USERFW)
 
 _conterm			equ $484	; Conterm device number
 
-
-; Constants needed for the commands
-RANDOM_TOKEN_ADDR:        equ (CMD_MAGIC_SENTINEL_ADDR + 4)  ; $FA2004
-RANDOM_TOKEN_SEED_ADDR:   equ (RANDOM_TOKEN_ADDR + 4)        ; $FA2008
-; $FA200C: 4-byte slot reserved for future framework use. chandler_init
-; zeroes it at boot; apps must not write here.
-RESERVED_SLOT_ADDR:       equ (RANDOM_TOKEN_SEED_ADDR + 4)   ; $FA200C
-RANDOM_TOKEN_POST_WAIT:   equ $1                             ; Wait cycles after the RNG is ready
-COMMAND_TIMEOUT           equ $0000FFFF                      ; Timeout for the command
-COMMAND_WRITE_TIMEOUT     equ COMMAND_TIMEOUT                ; Timeout for write commands
-
-SHARED_VARIABLES:         equ (RESERVED_SLOT_ADDR + 4)       ; $FA2010 (60 indexed 4-byte slots)
-
-ROMCMD_START_ADDR:        equ $FB0000					  ; We are going to use ROM3 address
-CMD_MAGIC_NUMBER    	  equ ($ABCD) 					  ; Magic number header to identify a command
-CMD_RETRIES_COUNT	  	  equ 3							  ; Number of retries for the command
-CMD_SET_SHARED_VAR		  equ $FF00						  ; Set shared variable d3 to d4. Answered by the RP's
-														  ; chandler itself (CHANDLER_SET_SHARED_VAR)
 ; App commands for the terminal
 APP_TERMINAL 				equ $0 ; The terminal app
 
@@ -96,8 +49,9 @@ APP_TERMINAL 				equ $0 ; The terminal app
 APP_TERMINAL_START   		equ $0 ; Start terminal command
 APP_TERMINAL_KEYSTROKE 		equ $1 ; Keystroke command
 
-_dskbufp                equ $4c6                            ; Address of the disk buffer pointer    
-
+; The cartridge window's layout and the command channel, shared with every
+; module that talks to the RP.
+	include inc/sidecart_layout.s
 
 	include inc/sidecart_macros.s
 	include inc/tos.s
@@ -394,6 +348,22 @@ rom_function:
 ; Don't forget to include the macros for the shared functions at the top of file
     include "inc/sidecart_functions.s"
 
+; The NOP tail. The senders' wait loop must never be the last code of a module:
+; firmware.py strips trailing zero bytes from the image, the RP copies only
+; that many words into the cartridge window, and both the write sender (its
+; code size includes 4 bytes past the loop) and the 68000's prefetch read past
+; the loop's last word. Every module that includes sidecart_functions.s ends
+; like this.
+	even
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+main_end:
 
 end_rom_code:
 end_pre_auto:
