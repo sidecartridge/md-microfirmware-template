@@ -1,0 +1,22 @@
+# The two build types of ./build.sh, so a CMake Tools build in VS Code
+# compiles what the scripts compile: CMake MinSizeRel (as rp/build.sh), with
+# DEBUG_MODE and the development UUID that CMakeLists.txt reads from the
+# environment at configure time. Switch variants and let CMake Tools
+# reconfigure.
+buildType:
+  default: release
+  choices:
+    release:
+      short: release
+      long: Shipping build, no traces
+      buildType: MinSizeRel
+      env:
+        DEBUG_MODE: "0"
+        APP_UUID_KEY: "44444444-4444-4444-8444-444444444444"
+    debug:
+      short: debug
+      long: Same build with DPRINTF traces on the UART console
+      buildType: MinSizeRel
+      env:
+        DEBUG_MODE: "1"
+        APP_UUID_KEY: "44444444-4444-4444-8444-444444444444"
