@@ -60,3 +60,9 @@ dist/
 .cache/
 .claude/
 .DS_Store
+
+# Host-side developer tools: capture and build output
+tools/dev/logs/
+tools/dev/builds/
+*.pyc
+__pycache__/
