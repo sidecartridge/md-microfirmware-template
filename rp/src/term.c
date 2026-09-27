@@ -8,10 +8,9 @@
 
 #include "term.h"
 
-#include <stdarg.h>
-
 #include <ctype.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -716,8 +715,8 @@ void term_printNetworkInfo(void) {
   uint32_t sdFreeMb = 0;
   if (sdcard_getMountedInfo(&sdTotalMb, &sdFreeMb)) {
     snprintf(sdStatus, sizeof(sdStatus), "Mounted");
-    snprintf(sdSpace, sizeof(sdSpace), "%lu/%lu MB",
-             (unsigned long)sdFreeMb, (unsigned long)sdTotalMb);
+    snprintf(sdSpace, sizeof(sdSpace), "%lu/%lu MB", (unsigned long)sdFreeMb,
+             (unsigned long)sdTotalMb);
   } else if (sdcard_isMounted()) {
     snprintf(sdStatus, sizeof(sdStatus), "Error");
   }
@@ -906,8 +905,8 @@ static bool term_buildLiveMenuLines(char *ssidLine, size_t ssidLineSize,
   uint32_t sdFreeMb = 0;
   if (sdcard_getMountedInfo(&sdTotalMb, &sdFreeMb)) {
     snprintf(sdStatus, sizeof(sdStatus), "Mounted");
-    snprintf(sdSpace, sizeof(sdSpace), "%lu/%lu MB",
-             (unsigned long)sdFreeMb, (unsigned long)sdTotalMb);
+    snprintf(sdSpace, sizeof(sdSpace), "%lu/%lu MB", (unsigned long)sdFreeMb,
+             (unsigned long)sdTotalMb);
   } else if (sdcard_isMounted()) {
     snprintf(sdStatus, sizeof(sdStatus), "Error");
   }

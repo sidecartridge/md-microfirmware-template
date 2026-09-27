@@ -166,13 +166,26 @@ static void atariLine(char *line, size_t size) {
                  CHANDLER_SHARED_VARIABLES_OFFSET);
   const char *name = NULL;
   switch (machine) {
-    case 0x00000000: name = "ST"; break;
-    case 0x00010000: name = "STE"; break;
-    case 0x00010001: name = "ST Book"; break;
-    case 0x00010010: name = "Mega STE"; break;
-    case 0x00020000: name = "TT"; break;
-    case 0x00030000: name = "Falcon"; break;
-    default: break;
+    case 0x00000000:
+      name = "ST";
+      break;
+    case 0x00010000:
+      name = "STE";
+      break;
+    case 0x00010001:
+      name = "ST Book";
+      break;
+    case 0x00010010:
+      name = "Mega STE";
+      break;
+    case 0x00020000:
+      name = "TT";
+      break;
+    case 0x00030000:
+      name = "Falcon";
+      break;
+    default:
+      break;
   }
   uint32_t tos = versions >> 16;
   if (name != NULL) {
