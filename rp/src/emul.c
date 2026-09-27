@@ -32,6 +32,11 @@
 
 #define SLEEP_LOOP_MS 100
 
+// How long a sentinel command the ST must act on before this side moves on
+// is held. The ST reads the sentinel once per pass of its menu loop (measured
+// on an ST: within 42 ms); the hold is well over that.
+#define SENTINEL_HOLD_MS 500
+
 enum {
   APP_MODE_SETUP = 255  // Setup
 };
@@ -117,6 +122,15 @@ static uint32_t emul_devhooksApp(uint16_t commandId, const uint16_t *payload,
   }
 }
 #endif
+
+// Keep answering the ST for ms milliseconds, so a command in flight is not
+// left without its answer while a sentinel command waits to be seen.
+static void emul_serviceFor(uint32_t ms) {
+  absolute_time_t until = make_timeout_time_ms(ms);
+  while (absolute_time_diff_us(get_absolute_time(), until) > 0) {
+    chandler_loop();
+  }
+}
 
 static void __not_in_flash_func(emul_pollTick)(void) {
   chandler_loop();
@@ -581,10 +595,12 @@ void emul_start() {
   // Ok, so we are done with the setup but we want to reset the computer to
   // reboot in the same microfirmware app or start the booster app
 
-  sleep_ms(SLEEP_LOOP_MS);
-  // We must reset the computer
+  emul_serviceFor(SLEEP_LOOP_MS);
+  // We must reset the computer. Hold the command long enough for the ST's
+  // menu loop to see it, and keep answering: a keystroke in flight would
+  // otherwise keep the ST in its send, retrying, until the hold was over.
   SEND_COMMAND_TO_DISPLAY(DISPLAY_COMMAND_RESET);
-  sleep_ms(SLEEP_LOOP_MS);
+  emul_serviceFor(SENTINEL_HOLD_MS);
   if (getResetDevice()) {
     // Reset the device
     reset_device();
