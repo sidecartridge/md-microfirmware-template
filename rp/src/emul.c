@@ -179,6 +179,12 @@ void cmdExit(const char *arg) {
 }
 
 void cmdFirmware(const char *arg) {
+  if (!chandler_stPresent()) {
+    // The user firmware relies on what the ST publishes at boot (the machine
+    // type, for a Mega STE's cache), and this RP has not heard it yet.
+    term_printString("\nReset the Atari ST first.\n");
+    return;
+  }
   menuScreenActive = false;
   term_printString("Launching user firmware on the Atari ST...\n");
   // Write CMD_START into the cartridge sentinel slot. The m68k's
@@ -537,6 +543,15 @@ void emul_start() {
     // Drain the ROM3 command ring and dispatch to the registered callbacks on
     // every pass: the ST spins on its answer, so the loop never waits.
     chandler_loop();
+    if (chandler_consumeStBoot()) {
+      // A new ST session: nothing typed before the reset carries over, and
+      // the ST gets a freshly drawn menu.
+      term_clearInputBuffer();
+      if (menuScreenActive) {
+        menu();
+        display_refresh();
+      }
+    }
 #if PICO_CYW43_ARCH_POLL
     // Wi-Fi every 10 ms, not on every pass: polled flat out (hundreds of
     // thousands of times a second) the RP hard-faulted inside

@@ -47,6 +47,7 @@ ROMCMD_START_ADDR       equ $FB0000
 CMD_MAGIC_NUMBER        equ ($ABCD)     ; Magic number header to identify a command
 CMD_SET_SHARED_VAR      equ $FF00       ; Set shared variable d3 to d4. Answered by the RP's
                                         ; chandler itself (CHANDLER_SET_SHARED_VAR)
+CMD_ST_HELLO            equ $FF01       ; The ST has booted (CHANDLER_ST_HELLO); no payload
 
 ; Per module: define these before including this file to give a module its
 ; own. The timeout is a spin count around the token check, so it is shorter

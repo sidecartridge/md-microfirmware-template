@@ -806,7 +806,7 @@ The cartridge image is split into two `.text` sections by `target/atarist/src/us
 `USERFW equ (ROM4_ADDR + $800)` names the entry. Once the RP writes `CMD_START` to the cartridge sentinel, `main.s`'s `check_commands` macro `beq`s to `rom_function`, which puts back a Mega STE's cache setting and does `jmp USERFW`. The top of the stack is then TOS's return address: an `rts` from the user firmware lets TOS carry on booting, as the demo does.
 
 How to launch the user firmware:
-- From the RP/terminal side: pick `[F]irmware` in the menu (key `f`). The `cmdFirmware` handler in `rp/src/emul.c` writes `DISPLAY_COMMAND_START` (= `4` = `CMD_START`) to the cartridge sentinel via `SEND_COMMAND_TO_DISPLAY`. The m68k's vsync-polled `check_commands` then dispatches to `USERFW`.
+- From the RP/terminal side: pick `[F]irmware` in the menu (key `f`). The `cmdFirmware` handler in `rp/src/emul.c` writes `DISPLAY_COMMAND_START` (= `4` = `CMD_START`) to the cartridge sentinel via `SEND_COMMAND_TO_DISPLAY`. The m68k's vsync-polled `check_commands` then dispatches to `USERFW`. The command is refused until the RP has had the ST's hello since it started: after an RP-only reboot, reset the ST first.
 - The sentinel is a level, not a queue: it stays at `CMD_START` until the RP writes something else, so resetting the ST runs the user firmware again.
 
 What `userfw.s` has to work with (all included at its top, the senders at its end):
@@ -1043,6 +1043,8 @@ If the user firmware hooks a trap (GEMDOS, BIOS, XBIOS) to stay resident, md-dri
 - **Give the caller its registers back as TOS does**: every one but `d0` to a supervisor-mode caller, all but `a0` to a user-mode one. Programs count on it.
 
 `$FF00` (`CMD_SET_SHARED_VAR`, `CHANDLER_SET_SHARED_VAR` on the RP) is answered by the RP's chandler itself: "set shared variable d3 to d4". `main.s` uses it at every boot, through `detect_hw` and `get_tos_version`, to publish the machine (`_MCH` cookie, 0 for an ST) in shared variable 0 and the TOS version in variable 1.
+
+`$FF01` (`CMD_ST_HELLO`, `CHANDLER_ST_HELLO` on the RP) has no payload and is also answered by the chandler itself. `main.s` sends it first thing at every boot, until it is answered, so the RP knows the ST has booted: `chandler_stPresent()` is true from then on, and `chandler_consumeStBoot()` is true once per boot. The RP and the ST reboot independently, so after an RP-only reboot the RP has not heard from the ST, and what the ST published at its boot was cleared with the window.
 
 An example, a keystroke for the terminal:
 

@@ -87,6 +87,9 @@
 // Set shared variable d3 to d4. Sent by the m68k's detect_hw and
 // get_tos_version at every boot (CMD_SET_SHARED_VAR in main.s).
 #define CHANDLER_SET_SHARED_VAR ((CHANDLER_APP_FRAMEWORK << 8) | 0x00)
+// The ST has booted: sent by main.s first thing at every ST boot, until
+// answered (CMD_ST_HELLO). No payload.
+#define CHANDLER_ST_HELLO ((CHANDLER_APP_FRAMEWORK << 8) | 0x01)
 
 // Maximum number of command callbacks that may be registered with
 // chandler_addCB. Pick a small bound so a buggy app cannot leak
@@ -108,6 +111,26 @@ void chandler_init();
 void __not_in_flash_func(chandler_loop)();
 
 void __not_in_flash_func(chandler_addCB)(CommandCallback cb);
+
+/**
+ * @brief True once the ST has said hello (CHANDLER_ST_HELLO) since this RP
+ * started.
+ *
+ * The RP and the ST reboot independently. After an RP-only reboot the ST is
+ * still running, but what it published at its own boot (shared variables 0
+ * and 1) was cleared with the window: anything that relies on it waits for
+ * the ST's next boot.
+ */
+bool chandler_stPresent(void);
+
+/**
+ * @brief True once after each ST boot, then false until the next one.
+ *
+ * The app starts the ST's session fresh when it sees it: the RP keeps its own
+ * state across an ST reset (the terminal, the sentinel, the shared variables),
+ * and only the random token and seed are meant to carry on.
+ */
+bool chandler_consumeStBoot(void);
 
 #if defined(_DEBUG) && (_DEBUG != 0)
 /**
