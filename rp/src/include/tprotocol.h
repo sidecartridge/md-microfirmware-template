@@ -202,6 +202,13 @@ static inline void __not_in_flash_func(tprotocol_parse)(
 
     case PAYLOAD_SIZE_READ:
       tprotocol_transmission.payload_size = data;
+      if (data > MAX_PROTOCOL_PAYLOAD_SIZE) {
+        // More than the payload buffer holds: storing it would write past
+        // the buffer and the checksum would read past it. Drop the command;
+        // the ST gets no answer and reports an error.
+        tprotocol_nextTPstep = HEADER_DETECTION;
+        break;
+      }
     case PAYLOAD_READ_START:
       tprotocol_transmission.bytes_read = 0;
       tprotocol_nextTPstep = PAYLOAD_READ_INPROGRESS;
