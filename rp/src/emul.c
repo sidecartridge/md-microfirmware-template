@@ -510,16 +510,21 @@ void emul_start() {
   devhooks_setAppHandler(emul_devhooksApp);
 
   DPRINTF("Start the app loop here\n");
+  absolute_time_t nextNetworkPoll = get_absolute_time();
   while (getKeepActive()) {
     devhooks_poll();
-#if PICO_CYW43_ARCH_POLL
-    network_safePoll();
-    cyw43_arch_wait_for_work_until(make_timeout_time_ms(SLEEP_LOOP_MS));
-#else
-    sleep_ms(SLEEP_LOOP_MS);
-#endif
-    // Drain the ROM3 command ring → dispatch to registered callbacks.
+    // Drain the ROM3 command ring and dispatch to the registered callbacks on
+    // every pass: the ST spins on its answer, so the loop never waits.
     chandler_loop();
+#if PICO_CYW43_ARCH_POLL
+    // Wi-Fi every 10 ms, not on every pass: polled flat out (hundreds of
+    // thousands of times a second) the RP hard-faulted inside
+    // cyw43_arch_poll(), for a reason not yet understood.
+    if (absolute_time_diff_us(nextNetworkPoll, get_absolute_time()) >= 0) {
+      network_safePoll();
+      nextNetworkPoll = make_timeout_time_ms(10);
+    }
+#endif
 
     // Run the terminal foreground (consume the published command, render
     // output, etc.).

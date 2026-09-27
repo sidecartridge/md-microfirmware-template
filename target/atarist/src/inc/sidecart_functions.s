@@ -4,9 +4,12 @@
 _p_cookies                              equ $5a0    ; pointer to the system Cookie-Jar
 
 COOKIE_JAR_MEGASTE                      equ $00010010 ; Mega STE computer
+COOKIE_JAR_TT                           equ $00020000 ; TT; the Falcon is $00030000: both a 68030
+MEGASTE_SPEED_CACHE_REG                 equ $FFFF8E21 ; Mega STE: bit 0 the cache, bit 1 16 MHz (no cache at 8 MHz)
 SHARED_VARIABLE_SHARED_FUNCTIONS_SIZE   equ 16      ; Size of the shared variables for the shared functions
 SHARED_VARIABLE_HARDWARE_TYPE           equ 0       ; Hardware type of the Atari ST computer
 SHARED_VARIABLE_SVERSION                equ 1       ; TOS version from Sversion
+HARDWARE_TYPE_ADDR                      equ (SHARED_VARIABLES + (SHARED_VARIABLE_HARDWARE_TYPE * 4)) ; what detect_hw wrote
 
 COMMAND_SYNC_CODE_SIZE                  equ (4 + _end_sync_code_in_stack - _start_sync_code_in_stack)
 COMMAND_SYNC_WRITE_CODE_SIZE            equ (4 + _end_sync_write_code_in_stack - _start_sync_write_code_in_stack)
@@ -81,9 +84,38 @@ get_tos_version:
     move.l #SHARED_VARIABLE_SVERSION, d3    ; Variable index
     move.l d0, d4                           ; Variable value
     send_sync CMD_SET_SHARED_VAR, 8
-    tst.w d0                    ; d0 holds error code: 0 = success, nonzero = failure
-    ; Do not retry indefinitely here; rely on send_sync's internal retry logic.
-    ; If the command failed, return with the error code in d0 instead of hard-locking boot.
+    ; No retry here: send_sync already retries CMD_RETRIES_COUNT times, each with
+    ; the full timeout, and looping on top of that would hang the boot for ever
+    ; when the RP did not answer. On failure the shared variable is left as it
+    ; was. d0 carries the error code, and Z is set exactly when it is 0.
+    tst.w d0
+    rts
+
+; A TT's or a Falcon's 68030 runs the wait loop from its instruction cache,
+; which does not see the copy a sender has just made: it may still hold, line
+; by line, a loop left at the same place before - the other sender's, which
+; counts in another register, or another module's, with its own timeout - and
+; run a mix of them. A command then gave up early and was sent again: on the
+; Falcon every other GEMDRIVE Fopen and Fcreate reached the RP twice, and
+; reads came back from the wrong place. Clear it, as TOS's own clrcache does.
+; The drivers call it after a read into memory too, where code may have just
+; arrived, as TOS's floppy driver clears its caches after every Rwabs read. The
+; machine is detect_hw's; before it has run, and on every other machine,
+; nothing is done. A 68000 has no CACR, and is told by _longframe before any
+; variable is read: the setup menu, in main.s, sends before any driver has
+; written the machine, and reading the wrong place put a Mega STE into four
+; bombs. Keeps every register.
+clear_icache_after_copy:
+    tst.w $59e.w                        ; _longframe: 0 on a 68000
+    beq.s .clear_icache_done
+    cmp.l #COOKIE_JAR_TT, HARDWARE_TYPE_ADDR
+    bcs.s .clear_icache_done
+    move.l d7, -(sp)
+    dc.w $4e7a, $7002                   ; movec cacr, d7
+    or.w #$0008, d7                     ; CI: clear the instruction cache
+    dc.w $4e7b, $7002                   ; movec d7, cacr
+    move.l (sp)+, d7
+.clear_icache_done:
     rts
 
 ; Send an sync command to the Sidecart
@@ -119,6 +151,7 @@ send_sync_command_to_sidecart:
 _copy_sync_code:
         move.w (a1)+, (a2)+
         dbf d7, _copy_sync_code
+        bsr clear_icache_after_copy
     endif
 
     ; The sync command synchronize with a random token
@@ -226,6 +259,12 @@ _start_sync_code_in_stack:
 _start_sync_code_in_stack_loop:
     cmp.l (a1), d2                           ; Compare the random number with the token
     bne.s _sync_token_not_ready
+    ; A token match alone is not an answer. The RP writes the token and then the
+    ; new seed as two separate stores, and the token we sent IS the seed we read:
+    ; accepted between the two stores, the next command would read the old seed,
+    ; reuse it as its token and match this same answer at once. Requiring the
+    ; seed to have advanced makes the pair a two-phase commit, and also covers a
+    ; freshly zeroed area where token and seed are both 0.
     cmp.l RANDOM_TOKEN_SEED_ADDR, d2         ; Seed must advance to prove a real response
     bne.s _sync_token_found                  ; Token found, we can finish succesfully
 _sync_token_not_ready:
@@ -240,6 +279,9 @@ _sync_token_found:
 ;_postwait_me:
 ;    dbf d7, _postwait_me
 ;_no_wait_me:
+    ; Callers may branch on the flags instead of testing d0 (acsi.s does), so
+    ; return with Z set exactly when d0 is 0, whatever compare ran last.
+    tst.w d0
     rts                                 ; Return to the code
 _end_sync_code_in_stack:
 
@@ -281,6 +323,7 @@ send_sync_write_command_to_sidecart:
 _copy_sync_code_write:
         move.w (a1)+, (a2)+
         dbf d7, _copy_sync_code_write
+        bsr clear_icache_after_copy
     endif
 
 ; Adjust the payload size to include the buffer
@@ -437,7 +480,7 @@ _start_sync_write_code_in_stack:
 _start_sync_write_code_in_stack_loop:
     cmp.l (a1), d2                                 ; Compare the random number with the token
     bne.s _sync_write_token_not_ready
-    cmp.l RANDOM_TOKEN_SEED_ADDR, d2               ; Seed must advance to prove a real response
+    cmp.l RANDOM_TOKEN_SEED_ADDR, d2               ; Seed must advance to prove a real response (see the read loop)
     bne.s _sync_write_token_found                  ; Token found, we can finish succesfully
 _sync_write_token_not_ready:
     subq.l #1, d6                                  ; Decrement the inner loop
@@ -451,6 +494,7 @@ _sync_write_token_found:
 ;_postwait_write_me:
 ;    dbf d6, _postwait_write_me
 ;_no_wait_write_me:
+    tst.w d0                            ; Z set exactly when d0 is 0 (see the read variant)
     rts                                 ; Return to the code
 
 _end_sync_write_code_in_stack:

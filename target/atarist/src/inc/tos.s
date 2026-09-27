@@ -226,6 +226,8 @@ Setcolor	EQU	7
 Floprd		EQU	8
 Flopwr		EQU	9
 Flopfmt		EQU	10
+Mfpint		EQU	13
+Flopver		EQU	19		; $13: not 13, which is Mfpint
 Random		EQU	17
 
 ; System variables
