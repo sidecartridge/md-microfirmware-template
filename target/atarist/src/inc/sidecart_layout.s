@@ -11,7 +11,8 @@
 ;   $FA2008  RANDOM_TOKEN_SEED_ADDR     4 B
 ;   $FA200C  reserved                   4 B
 ;   $FA2010  SHARED_VARIABLES           240 B (60 x 4-byte slots)
-;   $FA2100  APP_BUFFERS_ADDR           ~48 KB free arena (TRANSTABLE etc.)
+;   $FA2100  APP_BUFFERS_ADDR           TRANSTABLE (512 B), then
+;   $FA2300  APP_FREE_ADDR              ~48 KB for the app's own buffers
 ;   $FAE0C0  FRAMEBUFFER_ADDR           8000 B (320x200 mono, at the top)
 ;   $FAFFFF  end of region
 
@@ -23,7 +24,9 @@ CMD_MAGIC_SENTINEL_ADDR equ SHARED_BLOCK_ADDR                          ; $FA2000
 FRAMEBUFFER_SIZE        equ 8000        ; 8000 bytes of a 320x200 monochrome screen
 FRAMEBUFFER_ADDR        equ (ROM4_ADDR + $10000 - FRAMEBUFFER_SIZE)    ; $FAE0C0
 APP_BUFFERS_ADDR        equ (SHARED_BLOCK_ADDR + $100)                 ; $FA2100
-TRANSTABLE              equ APP_BUFFERS_ADDR                           ; high-res translation table
+TRANSTABLE              equ APP_BUFFERS_ADDR                           ; high-res translation table (512 B)
+APP_FREE_ADDR           equ (APP_BUFFERS_ADDR + $200)                  ; $FA2300: the app's own buffers,
+                                                                       ; up to FRAMEBUFFER_ADDR
 
 ; User firmware entry point. The cartridge image places userfw.s at offset
 ; $0800 of BOOT.BIN (target/atarist/src/userfw.ld): main.s gets the first 2 KB

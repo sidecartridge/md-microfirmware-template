@@ -803,13 +803,26 @@ The cartridge image is split into two `.text` sections by `target/atarist/src/us
 | `0x000000`  | `$FA0000`       | 2 KB    | `main.s` — boot + dispatch    |
 | `0x000800`  | `$FA0800`       | 6 KB    | `userfw.s` — user firmware    |
 
-`main.s` exposes the user firmware entry as `USERFW equ (ROM4_ADDR + $800)`. Once the RP signals readiness via `CMD_START` on the cartridge sentinel, `main.s`'s `check_commands` macro `beq`s to `rom_function`, which simply does `jmp USERFW`. There is no implicit return path — `userfw.s` owns execution from that point.
+`USERFW equ (ROM4_ADDR + $800)` names the entry. Once the RP writes `CMD_START` to the cartridge sentinel, `main.s`'s `check_commands` macro `beq`s to `rom_function`, which puts back a Mega STE's cache setting and does `jmp USERFW`. The top of the stack is then TOS's return address: an `rts` from the user firmware lets TOS carry on booting, as the demo does.
 
 How to launch the user firmware:
 - From the RP/terminal side: pick `[F]irmware` in the menu (key `f`). The `cmdFirmware` handler in `rp/src/emul.c` writes `DISPLAY_COMMAND_START` (= `4` = `CMD_START`) to the cartridge sentinel via `SEND_COMMAND_TO_DISPLAY`. The m68k's vsync-polled `check_commands` then dispatches to `USERFW`.
-- The whole hand-off is one-way; if your firmware needs to return control, it must do so explicitly (`jmp boot_gem` to continue the normal boot flow, loop forever, etc.).
+- The sentinel is a level, not a queue: it stays at `CMD_START` until the RP writes something else, so resetting the ST runs the user firmware again.
 
-What the default `userfw.s` ships with:
+What `userfw.s` has to work with (all included at its top, the senders at its end):
+
+| File | What it gives |
+| --- | --- |
+| `inc/sidecart_layout.s` | The cartridge window (`RANDOM_TOKEN_ADDR`, `SHARED_VARIABLES`, `APP_FREE_ADDR`, `FRAMEBUFFER_ADDR`, …) and the command channel. Shared with `main.s`; the single source of truth on the m68k side. |
+| `inc/sidecart_macros.s` | `send_sync` / `send_write_sync`, what a send keeps and destroys, and the Mega STE cache macros. |
+| `inc/tos.s` | GEMDOS, BIOS and XBIOS function numbers. They are decimal in `cmp.w #n`; the documents often give them in hex. |
+| `inc/sidecart_functions.s` | The senders themselves, `detect_hw` and `get_tos_version`. Included at the end of the module, followed by the NOP tail. |
+
+Two rules for the code itself:
+- **Everything is PC-relative.** The module runs from the cartridge but is linked at offset `$0800`, not at `$FA0800`: use `lea label(pc), a0`, never an absolute label.
+- **The module ends with the NOP tail**, after `include "inc/sidecart_functions.s"`: `even`, eight `nop`s, a `<module>_end:` label. `firmware.py` strips trailing zeros from the image and the RP copies only that many words into the window, while the write sender and the 68000's prefetch read past the end of the wait loop. `userfw.s` is the last module in the image, so this is not optional there.
+
+The default `userfw.s` prints a message and returns:
 
 ```asm
 userfw:
@@ -819,20 +832,14 @@ userfw:
     trap    #1                      ; call GEMDOS
     addq.l  #6, sp                  ; clean up arguments
     rts
-
-hello_msg:
-    dc.b    27,"E"                   ; VT52 clear screen + home cursor
-    dc.b    "Example firmware load..."
-    dc.b    0
-    even
 ```
 
-Replace the body with your own m68k code; the shared-region symbols defined in `main.s` (`RANDOM_TOKEN_ADDR`, `SHARED_VARIABLES`, `APP_FREE_ADDR`, …) are reachable from `userfw.s` as well. Keep the total cartridge image (`main.s` + `userfw.s` after vlink padding) within `CARTRIDGE_CODE_SIZE = 8 KB`; `target/atarist/build.sh` enforces this against `BOOT.BIN` after `vlink`.
+Keep the total cartridge image (`main.s` + `userfw.s`) within `CARTRIDGE_CODE_SIZE = 8 KB`; `target/atarist/build.sh` enforces this against `BOOT.BIN` after `vlink`.
 
 Adding more modules (mirroring md-drives-emulator's `gemdrive.ld` pattern):
 1. Pick an offset within the cartridge budget and add a new `.text_<name> 0x????? : { <name>.o(.text) }` section to `userfw.ld`.
-2. Mirror the offset on the m68k side with an `equ (ROM4_ADDR + $????)` symbol in `main.s`.
-3. Add the `.o` target to `target/atarist/Makefile` and link it in.
+2. Mirror the offset on the m68k side with an `equ (ROM4_ADDR + $????)` symbol in `inc/sidecart_layout.s`.
+3. Add the `.o` target to `target/atarist/Makefile` and link it in. A module that talks to the RP includes the same files as `userfw.s` and ends with the NOP tail.
 4. Either chain modules from `rom_function` (e.g. `jsr GEMDRIVE / jsr FLOPPYEMUL / jmp USERFW`), or add a new sentinel command and dispatch from `check_commands`.
 
 #### The Transmision Protocol (TPROTOCOL)
@@ -998,48 +1005,43 @@ Returning values to the Atari ST is a much more easy task. In order to do so, wr
 
 ###### Sending commands from the remote computer
 
-The commands are sent from the remote Atari ST computer using the `sidecart_functions.s` functions defined in the `/target/atarist/src/inc` folder. These functions are implemented in assembler and are used to send the commands to the microcontroller:
-
-The `send_sync_command_to_sidecart` function sends a commands in d0.w to the microcontroller and waits for a response from the microcontroller. The response is a random number that is used as a token to identify the command. The function returns an error code in the d0 register. The payload size is passed in d1.w, and payload is passed in the d3 to d6 registers, depending on the size of the payload.
-
-But if you want to send a command with much larger payload, you can use the `send_sync_write_command_to_sidecart` function. This function sends a command in d0.w to the microcontroller and waits for a response. The response is a random number that is used as a token to identify the command. The function returns an error code in the d0 register. The payload size is as follows:
-- d3.l, d4.l and d5.l registers passed ALWAYS as argument.
-- a4 marks the start address of the buffer to send.
-- d6.w size of the buffer to send.
-
-So the effective payload size that the microcontroller will read will be d6.w + $C. The first 6 long words of d3.l d4.l and d5.l plus the buffer. 
-
-For the sake of convenience, the `sidecart_macros.s` implements these two macros to easy the development:
+The ST sends commands with the functions in `target/atarist/src/inc/sidecart_functions.s`, through the macros in `inc/sidecart_macros.s`:
 
 ```asm
-; Send a synchronous command to the Multi-device passing arguments in the Dx registers
-; /1 : The command code
-; /2 : The payload size (even number always)
-send_sync           macro
-                    moveq.l #\2, d1                      ; Set the payload size of the command
-                    move.w #\1,d0                        ; Command code
-                    bsr send_sync_command_to_sidecart    ; Send the command to the Multi-device
-                    endm    
-
-; Send a synchronous write command to the Multi-device passing arguments in the D3-D5 registers
-; A4 address of the buffer to send
-; /1 : The command code
-; /2 : The buffer size to send in bytes (will be rounded to the next word)
-send_write_sync     macro
-                    move.w #\1,d0                           ; Command code
-                    moveq.l #12, d1                         ; Set the payload size of the command (d3.l, d4.l and d5.l)
-                    move.l #\2,d6                           ; Number of bytes to send
-                    bsr send_sync_write_command_to_sidecart ; Send the command to the Multi-device
-                    endm    
+send_sync       <command>, <payload bytes>   ; payload in d3-d6 (0 to 16 bytes)
+send_write_sync <command>, <buffer bytes>    ; d3, d4, d5 always sent, then the buffer at a4
 ```
 
-And an exmaple of the use:
+Each macro sends the command, waits for the RP's answer and resends up to `CMD_RETRIES_COUNT` times. It returns with `d0 = 0` and Z set on success, `d0` non-zero and Z clear when every attempt timed out. The functions underneath (`send_sync_command_to_sidecart`, `send_sync_write_command_to_sidecart`) keep the same contract, so code may branch on the flags straight after either.
+
+What a send keeps, measured on an ST:
+
+| Macro | Keeps | Destroys |
+| --- | --- | --- |
+| `send_sync` | d1-d6 | d0, d7 (its retry count), a0-a1 (a0-a3 when the wait loop is copied, `COMMAND_SYNC_USE_DSKBUF` not 0) |
+| `send_write_sync` | d1-d5, a4 | d0, d6 (its retry count), d7, a0-a1 (a0-a3 likewise) |
+
+The senders leave a0 and a1 pointing into the ROM3 command window: a payload read through them is itself sampled by the RP, and the command fails its checksum on every retry. Take what you need into a kept register before the send, and reload address registers after it.
+
+How the exchange works, and what each side may assume:
+
+- **The command is read, not written.** The cartridge port is read-only, so the ST emits each 16-bit word by reading `$FB8000 + word`: the header `$ABCD`, the command, the payload size, the random token, the payload and a checksum.
+- **The answer is a two-phase commit.** The token is the seed the ST read at `RANDOM_TOKEN_SEED_ADDR` just before sending. The RP writes the token back to `RANDOM_TOKEN_ADDR`, then a new seed; the ST accepts the answer only when the token matches *and* the seed has moved. That also rejects the reads of a missing or not yet running cartridge, where both read the same.
+- **The timeout is a spin count, not time**, and it is per module: `COMMAND_TIMEOUT` counts turns of the loop that checks the token, so it is shorter on a faster CPU, and a module that defines its own before including `inc/sidecart_layout.s` keeps it.
+- **A retry is a new command.** It carries a fresh token, and the RP may already have executed the attempt whose answer the ST stopped waiting for. A command must be harmless to run twice, or carry its own sequence number.
+- **The RP answers first**, from its main loop, which drains the command ring on every pass without waiting. Measured on an ST: about 2 ms per command with a 4-byte payload, 3 ms with a 1 KB payload.
+- **A Mega STE's cache must be off while the ST talks to the cartridge**; its speed does not matter. `main.s` handles the setup menu. User firmware wraps each send in `megaste_cache_off` / `megaste_cache_back`.
+- **A 68030 (TT, Falcon) needs its instruction cache cleared** after code is copied into RAM and run. The senders do it when they copy their wait loop.
+
+`$FF00` (`CMD_SET_SHARED_VAR`, `CHANDLER_SET_SHARED_VAR` on the RP) is answered by the RP's chandler itself: "set shared variable d3 to d4". `main.s` uses it at every boot, through `detect_hw` and `get_tos_version`, to publish the machine (`_MCH` cookie, 0 for an ST) in shared variable 0 and the TOS version in variable 1.
+
+An example, a keystroke for the terminal:
 
 ```asm
-send_sync APP_TERMINAL_KEYSTROKE, 4
+    move.l d0, d3                   ; the key, as Cnecin returned it
+    send_sync APP_TERMINAL_KEYSTROKE, 4
+    bne.s .not_answered             ; Z clear: every attempt timed out
 ```
-
-Obviously, don't forget to populate the d3.l register with the value of the keystroke!
 
 ### Debugging in Visual Studio Code
 
