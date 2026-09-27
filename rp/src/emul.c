@@ -605,6 +605,15 @@ void emul_start() {
         display_refresh();
       }
     }
+    if (chandler_consumeSharedVarSet() && menuScreenActive) {
+      // The ST publishes its machine and TOS just after its hello.
+      char line[TERM_SCREEN_SIZE_X];
+      atariLine(line, sizeof(line));
+      if (strcmp(line, atariLineShown) != 0) {
+        menu();
+        display_refresh();
+      }
+    }
 #if PICO_CYW43_ARCH_POLL
     // Wi-Fi every 10 ms, not on every pass: polled flat out (hundreds of
     // thousands of times a second) the RP hard-faulted inside
@@ -624,12 +633,6 @@ void emul_start() {
       bool hasPendingInput = (input != NULL) && (input[0] != '\0');
       if (!hasPendingInput &&
           (absolute_time_diff_us(get_absolute_time(), menuRefreshTime) <= 0)) {
-        char line[TERM_SCREEN_SIZE_X];
-        atariLine(line, sizeof(line));
-        if (strcmp(line, atariLineShown) != 0) {
-          menu();  // what the ST told us changed: draw it all again
-          display_refresh();
-        }
         term_refreshMenuLiveInfo();
         menuRefreshTime = make_timeout_time_ms(MENU_REFRESH_TIME_MS);
       }

@@ -1044,7 +1044,7 @@ If the user firmware hooks a trap (GEMDOS, BIOS, XBIOS) to stay resident, md-dri
 
 `$FF00` (`CMD_SET_SHARED_VAR`, `CHANDLER_SET_SHARED_VAR` on the RP) is answered by the RP's chandler itself: "set shared variable d3 to d4". `main.s` uses it at every boot, through `detect_hw` and `get_tos_version`, to publish the machine (`_MCH` cookie, 0 for an ST) in shared variable 0 and the TOS version in variable 1.
 
-`$FF01` (`CMD_ST_HELLO`, `CHANDLER_ST_HELLO` on the RP) has no payload and is also answered by the chandler itself. `main.s` sends it first thing at every boot, until it is answered, so the RP knows the ST has booted: `chandler_stPresent()` is true from then on, and `chandler_consumeStBoot()` is true once per boot. The RP and the ST reboot independently, so after an RP-only reboot the RP has not heard from the ST, and what the ST published at its boot was cleared with the window.
+`$FF01` (`CMD_ST_HELLO`, `CHANDLER_ST_HELLO` on the RP) has no payload and is also answered by the chandler itself. `main.s` sends it first thing at every boot, until it is answered, so the RP knows the ST has booted: `chandler_stPresent()` is true from then on, and `chandler_consumeStBoot()` is true once per boot. `chandler_consumeSharedVarSet()` is true once after the ST has set shared variables with `$FF00`, so whatever shows them can wait for it instead of polling. The RP and the ST reboot independently, so after an RP-only reboot the RP has not heard from the ST, and what the ST published at its boot was cleared with the window.
 
 An example, a keystroke for the terminal:
 

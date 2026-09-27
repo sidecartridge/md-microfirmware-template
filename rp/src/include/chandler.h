@@ -132,6 +132,15 @@ bool chandler_stPresent(void);
  */
 bool chandler_consumeStBoot(void);
 
+/**
+ * @brief True once after the ST has set one or more shared variables with
+ * CHANDLER_SET_SHARED_VAR, then false until it sets another.
+ *
+ * The ST publishes its machine and TOS this way right after its hello, so
+ * whatever shows them can wait for this instead of reading them on a timer.
+ */
+bool chandler_consumeSharedVarSet(void);
+
 #if defined(_DEBUG) && (_DEBUG != 0)
 /**
  * @brief Debug-only: queue a protocol command as if the ST had sent it.
