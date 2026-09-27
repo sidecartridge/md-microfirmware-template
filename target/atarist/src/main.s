@@ -166,6 +166,16 @@ check_keys			macro
 
 					endm
 
+; The Mega STE's setting as megaste_take found it, and its word off the stack.
+; This runs from the copy in RAM: nothing PC-relative outside it.
+megaste_hand_back	macro
+					tst.b (sp)
+					beq.s .\@megaste_none
+					move.b 1(sp), MEGASTE_SPEED_CACHE_REG.w
+.\@megaste_none:
+					addq.l #2, sp
+					endm
+
 check_commands		macro
 					move.l CMD_MAGIC_SENTINEL_ADDR, d6	; Store in the D6 register the remote command value
 					cmp.l #CMD_TERMINAL, d6		; Check if the command is a terminal command
@@ -213,6 +223,13 @@ first:
     even
 
 pre_auto:
+; On a Mega STE, the cache off until the cartridge hands over: the setup menu
+; talks to the cartridge all along, and with the cache on its commands never
+; reach the RP. The speed stays the user's. The word under the return address
+; keeps the setting (megaste_take, megaste_hand_back).
+	clr.w -(sp)
+	bsr megaste_take
+
 ; Relocate the content of the cartridge ROM to the RAM
 
 ; Get the screen memory address to display
@@ -230,6 +247,29 @@ pre_auto:
     move.l (a1)+, (a2)+
     dbf d6, .copy_rom_code
 	jmp (a3)
+
+; The word the caller pushed takes a flag and the Mega STE's speed and cache
+; register, and the cache is turned off; the speed stays. Nothing has written
+; the machine type into the shared variables yet, so the cookie says.
+megaste_take:
+	move.l _p_cookies.w, d0
+	beq.s .megaste_take_done
+	move.l d0, a0
+.megaste_take_next:
+	move.l (a0)+, d0
+	beq.s .megaste_take_done
+	cmp.l #'_MCH', d0
+	beq.s .megaste_take_mch
+	addq.w #4, a0
+	bra.s .megaste_take_next
+.megaste_take_mch:
+	cmp.l #COOKIE_JAR_MEGASTE, (a0)
+	bne.s .megaste_take_done
+	st 4(sp)							; a setting to put back
+	move.b MEGASTE_SPEED_CACHE_REG.w, 5(sp)
+	bclr #0, MEGASTE_SPEED_CACHE_REG.w
+.megaste_take_done:
+	rts
 
 start_rom_code:
 ; We assume the screen memory address is in D0 after the get_screen_base call
@@ -332,6 +372,7 @@ start_rom_code:
 
 boot_gem:
 	; If we get here, continue loading GEM
+	megaste_hand_back
     rts
 
 ; Dispatcher for the user firmware module. Reached on CMD_START via the
@@ -342,6 +383,11 @@ boot_gem:
 ; the same way md-drives-emulator's rom_function dispatches into
 ; GEMDRIVE/FLOPPYEMUL/ACSIEMUL/RTCEMUL.
 rom_function:
+	; The user firmware's rts goes back to TOS, so the Mega STE's word comes
+	; off the stack first and the user's cache setting is back. Code there
+	; that talks to the cartridge turns the cache off around each send
+	; (megaste_cache_off / megaste_cache_back in inc/sidecart_macros.s).
+	megaste_hand_back
     jmp USERFW
 
 ; Shared functions included at the end of the file
