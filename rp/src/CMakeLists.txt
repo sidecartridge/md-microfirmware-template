@@ -219,6 +219,12 @@ if(${_DEBUG} STREQUAL "0")
     pico_enable_stdio_uart(${PROJECT_NAME} 0)
 else()
     pico_enable_stdio_uart(${PROJECT_NAME} 1)
+    # 921,600 baud, not the SDK's 115,200: DPRINTF blocks on the UART, and on a
+    # timing-sensitive cartridge bus a chatty console at 115,200 delays the
+    # firmware enough to change behavior. The UART clock error at this rate is
+    # 0.02 %. Set the serial terminal (tools/dev/console.py) to 921600.
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+        PICO_DEFAULT_UART_BAUD_RATE=921600)
 endif()
 
 # Print the variables on screen
