@@ -229,9 +229,13 @@ start_rom_code:
 ; We assume the screen memory address is in D0 after the get_screen_base call
 	move.l d0, a6				; Save the screen memory address in A6
 
-; Tell the RP which machine and TOS this is, in shared variables 0 and 1. The
-; senders' Mega STE and 68030 checks read the machine from there. detect_hw
-; waits until the RP answers; the senders keep a6.
+; Tell the RP the ST has booted, so it starts this session fresh, and then
+; which machine and TOS this is, in shared variables 0 and 1. The senders'
+; Mega STE and 68030 checks read the machine from there. Both wait until the
+; RP answers; the senders keep a6.
+.hello:
+	send_sync CMD_ST_HELLO, 0
+	bne.s .hello
 	bsr detect_hw
 	bsr get_tos_version
 

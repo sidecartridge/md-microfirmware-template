@@ -10,6 +10,7 @@
 
 #include <ctype.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -651,6 +652,19 @@ void __not_in_flash_func(term_loop)() {
 }
 
 // Command handlers
+// Print one line of the menu, cut to fit: the terminal wraps as soon as its
+// last column is written, so a line of TERM_SCREEN_SIZE_X characters would
+// leave a blank row after it, and a longer one would push the menu down.
+static void termPrintMenuLine(const char *fmt, ...) {
+  char line[TERM_SCREEN_SIZE_X];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(line, sizeof(line), fmt, args);  // at most SIZE_X - 1 characters
+  va_end(args);
+  term_printString(line);
+  term_printString("\n");
+}
+
 void term_printNetworkInfo(void) {
   char hostName[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
   char ipAddress[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
@@ -701,8 +715,8 @@ void term_printNetworkInfo(void) {
   uint32_t sdFreeMb = 0;
   if (sdcard_getMountedInfo(&sdTotalMb, &sdFreeMb)) {
     snprintf(sdStatus, sizeof(sdStatus), "Mounted");
-    snprintf(sdSpace, sizeof(sdSpace), "%lu/%lu MB free",
-             (unsigned long)sdFreeMb, (unsigned long)sdTotalMb);
+    snprintf(sdSpace, sizeof(sdSpace), "%lu/%lu MB", (unsigned long)sdFreeMb,
+             (unsigned long)sdTotalMb);
   } else if (sdcard_isMounted()) {
     snprintf(sdStatus, sizeof(sdStatus), "Error");
   }
@@ -787,28 +801,28 @@ void term_printNetworkInfo(void) {
 
   menuRowsValid = false;
 
-  TPRINTF("MCU type  : %s (%s)\n", mcuArch, mcuId);
-  TPRINTF("Host name : %s\n", hostName);
-  TPRINTF("WiFi      : %s (%s)\n", wifiMode, wifiLink);
-  TPRINTF("IP        : %s (%s)\n", ipAddress, ipMode);
-  TPRINTF("Netmask   : %s\n", netmask);
-  TPRINTF("Gateway   : %s\n", gateway);
-  TPRINTF("DNS       : %s, %s\n", dns1, dns2);
-  TPRINTF("WiFi MAC  : %s\n", wifiMac);
+  termPrintMenuLine("MCU type  : %s (%s)", mcuArch, mcuId);
+  termPrintMenuLine("Host name : %s", hostName);
+  termPrintMenuLine("WiFi      : %s (%s)", wifiMode, wifiLink);
+  termPrintMenuLine("IP        : %s (%s)", ipAddress, ipMode);
+  termPrintMenuLine("Netmask   : %s", netmask);
+  termPrintMenuLine("Gateway   : %s", gateway);
+  termPrintMenuLine("DNS       : %s, %s", dns1, dns2);
+  termPrintMenuLine("WiFi MAC  : %s", wifiMac);
 
   menuRowSsid = cursorY;
-  TPRINTF("SSID      : %s (%s)\n", ssid, signalDb);
+  termPrintMenuLine("SSID      : %s (%s)", ssid, signalDb);
 
-  TPRINTF("BSSID     : %s\n", bssid);
-  TPRINTF("Auth mode : %s\n", authMode);
+  termPrintMenuLine("BSSID     : %s", bssid);
+  termPrintMenuLine("Auth mode : %s", authMode);
 
   term_printString("\n");
   menuRowSelect = cursorY;
-  TPRINTF("SELECT  : %s\n", selectState);
+  termPrintMenuLine("SELECT    : %s", selectState);
 
   term_printString("\n");
   menuRowSd = cursorY;
-  TPRINTF("SD card   : %s (%s)\n", sdStatus, sdSpace);
+  termPrintMenuLine("SD card   : %s (%s)", sdStatus, sdSpace);
 
   menuRowsValid = true;
 }
@@ -891,8 +905,8 @@ static bool term_buildLiveMenuLines(char *ssidLine, size_t ssidLineSize,
   uint32_t sdFreeMb = 0;
   if (sdcard_getMountedInfo(&sdTotalMb, &sdFreeMb)) {
     snprintf(sdStatus, sizeof(sdStatus), "Mounted");
-    snprintf(sdSpace, sizeof(sdSpace), "%lu/%lu MB free",
-             (unsigned long)sdFreeMb, (unsigned long)sdTotalMb);
+    snprintf(sdSpace, sizeof(sdSpace), "%lu/%lu MB", (unsigned long)sdFreeMb,
+             (unsigned long)sdTotalMb);
   } else if (sdcard_isMounted()) {
     snprintf(sdStatus, sizeof(sdStatus), "Error");
   }
@@ -911,9 +925,14 @@ static bool term_buildLiveMenuLines(char *ssidLine, size_t ssidLineSize,
   }
 #endif
 
-  snprintf(ssidLine, ssidLineSize, "SSID      : %s (%s)", ssid, signalDb);
-  snprintf(selectLine, selectLineSize, "SELECT  : %s", selectState);
-  snprintf(sdLine, sdLineSize, "SD card   : %s (%s)", sdStatus, sdSpace);
+  // Cut like termPrintMenuLine, so the refresh never wraps either.
+  size_t maxLine = TERM_SCREEN_SIZE_X;
+  snprintf(ssidLine, ssidLineSize < maxLine ? ssidLineSize : maxLine,
+           "SSID      : %s (%s)", ssid, signalDb);
+  snprintf(selectLine, selectLineSize < maxLine ? selectLineSize : maxLine,
+           "SELECT    : %s", selectState);
+  snprintf(sdLine, sdLineSize < maxLine ? sdLineSize : maxLine,
+           "SD card   : %s (%s)", sdStatus, sdSpace);
 
   return true;
 }

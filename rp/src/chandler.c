@@ -16,6 +16,13 @@
 static TransmissionProtocol pendingProtocol;
 static bool protocolPending = false;
 
+// The ST's CHANDLER_ST_HELLO: seen since this RP started, and not yet
+// consumed by the app.
+static bool stPresent = false;
+static bool stBootPending = false;
+// A CHANDLER_SET_SHARED_VAR not yet consumed by the app.
+static bool sharedVarSetPending = false;
+
 static uint32_t incrementalCmdCount = 0;
 
 // Address of the random-token reply slot (chandler_loop publishes the
@@ -131,6 +138,20 @@ static inline void __not_in_flash_func(handle_protocol_command)(
   protocolPending = true;
 }
 
+bool chandler_stPresent(void) { return stPresent; }
+
+bool chandler_consumeStBoot(void) {
+  bool booted = stBootPending;
+  stBootPending = false;
+  return booted;
+}
+
+bool chandler_consumeSharedVarSet(void) {
+  bool set = sharedVarSetPending;
+  sharedVarSetPending = false;
+  return set;
+}
+
 #if defined(_DEBUG) && (_DEBUG != 0)
 // Debug-only entry point for tools/dev/swd.py: queue a protocol command as if
 // the ST had sent it, so the next chandler_loop() dispatches it normally.
@@ -196,7 +217,13 @@ void __not_in_flash_func(chandler_loop)() {
   // Jump the random token
   TPROTO_NEXT32_PAYLOAD_PTR(payloadPtr);
 
-  if (commandId == CHANDLER_SET_SHARED_VAR) {
+  if (commandId == CHANDLER_ST_HELLO) {
+    // The framework's own command: no callback sees it. The random token and
+    // seed carry on across ST boots on purpose: the ST reads them back.
+    DPRINTF("The ST has booted\n");
+    stPresent = true;
+    stBootPending = true;
+  } else if (commandId == CHANDLER_SET_SHARED_VAR) {
     // The framework's own command: no callback sees it.
     uint32_t index = TPROTO_GET_PAYLOAD_PARAM32(payloadPtr);
     TPROTO_NEXT32_PAYLOAD_PTR(payloadPtr);
@@ -204,6 +231,7 @@ void __not_in_flash_func(chandler_loop)() {
     if (index < CHANDLER_SHARED_VARIABLES_SLOTS) {
       SET_SHARED_VAR(index, value, (uint32_t)&__rom_in_ram_start__,
                      CHANDLER_SHARED_VARIABLES_OFFSET);
+      sharedVarSetPending = true;
     } else {
       DPRINTF("Shared variable %lu is past the %u slots; ignored\n",
               (unsigned long)index, (unsigned)CHANDLER_SHARED_VARIABLES_SLOTS);
