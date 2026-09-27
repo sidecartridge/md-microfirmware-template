@@ -214,6 +214,9 @@ void __not_in_flash_func(chandler_loop)() {
     }
   }
 
+  // The answer. The ST spins on it, so nothing slow goes between the callbacks
+  // and this write: an LED update (on a Pico W a bus transaction to the Wi-Fi
+  // chip), a trace, a flash write. Do such work after it.
   incrementalCmdCount++;
   // 64-bit write: low 32b -> RANDOM_TOKEN (echoes request token), high 32b
   // -> RANDOM_TOKEN_SEED (incrementalCmdCount). SEED MUST differ from the
