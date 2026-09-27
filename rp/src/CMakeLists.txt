@@ -206,8 +206,10 @@ if(NOT RELEASE_DATE)
         set(RELEASE_DATE ${CURRENT_DATE_TIME})
 endif()
 
+# DEBUG_MODE is "0" for a release build, which CMake reads as false: defaulting
+# to 1 here made every release build a debug build. Unset means release too.
 if (NOT _DEBUG)
-        set(_DEBUG 1)
+        set(_DEBUG 0)
 endif()
 
 # Debug outputs
