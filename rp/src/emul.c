@@ -364,6 +364,27 @@ void emul_start() {
   //
   // Copy the terminal firmware to RAM
   COPY_FIRMWARE_TO_RAM((uint16_t *)target_firmware, target_firmware_length);
+#if defined(_DEBUG) && (_DEBUG != 0)
+  // The ST must see exactly the generated image.
+  if (memcmp((const void *)&__rom_in_ram_start__, target_firmware,
+             (size_t)target_firmware_length * sizeof(uint16_t)) != 0) {
+    DPRINTF("ERROR: cartridge image in RAM does not match target_firmware\n");
+  } else {
+    DPRINTF("Cartridge image in RAM verified (%u words)\n",
+            (unsigned)target_firmware_length);
+  }
+  // Nothing from a previous run may survive past the end of the image.
+  {
+    const uint8_t *window = (const uint8_t *)&__rom_in_ram_start__;
+    size_t used = (size_t)target_firmware_length * sizeof(uint16_t);
+    size_t leftovers = 0;
+    for (size_t i = used; i < ROM_SIZE_BYTES * ROM_BANKS; i++) {
+      if (window[i] != 0) leftovers++;
+    }
+    DPRINTF("Cartridge window after the image: %u non-zero bytes\n",
+            (unsigned)leftovers);
+  }
+#endif
 
   // Initialize the cartridge ROM4 read engine. ROM4 reads are served entirely
   // by chained DMAs feeding the PIO TX FIFO — no CPU/IRQ involvement.
