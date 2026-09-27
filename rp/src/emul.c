@@ -135,6 +135,7 @@ static void emul_serviceFor(uint32_t ms) {
 static void __not_in_flash_func(emul_pollTick)(void) {
   chandler_loop();
   term_loop();
+  select_poll();
 }
 
 #define MENU_REFRESH_TIME_MS 1000
@@ -491,6 +492,15 @@ void emul_start() {
   // Initialize the display
   display_setupU8g2();
 
+  // Configure the SELECT button before anything slow (the SD card, the
+  // network), so a press is seen from here on; its edge interrupt catches one
+  // made while a wait cannot poll. A short press restarts the RP. A press held
+  // for SELECT_LONG_RESET is a factory reset: the global settings are erased
+  // and the RP restarts into Booster, which then clears every app's settings.
+  select_configure();
+  select_setResetCallback(reset_device);
+  select_setLongResetCallback(reset_deviceAndEraseFlash);
+
   // 5. Init the sd card
   // Most of the apps or microfirmwares will need to read and write files
   // to the SD card. The SD card is used to store the ROM, floppies, even
@@ -581,10 +591,7 @@ void emul_start() {
     }
   }
 
-  // 7. Configure the SELECT button so menu status can show it immediately.
-  select_configure();
-
-  // 8. Now complete the terminal emulator initialization
+  // 7. Now complete the terminal emulator initialization
   // The terminal emulator is used to interact with the user to configure the
   // device.
   init();
@@ -594,7 +601,7 @@ void emul_start() {
   blink_on();
 #endif
 
-  // 9. Start the main loop
+  // 8. Start the main loop
   // The main loop is the core of the app. It is responsible for running the
   // app, handling the user input, and performing the tasks of the app.
   // The main loop runs until the user decides to exit.
@@ -606,6 +613,7 @@ void emul_start() {
   absolute_time_t nextNetworkPoll = get_absolute_time();
   while (getKeepActive()) {
     devhooks_poll();
+    select_poll();
     // Drain the ROM3 command ring and dispatch to the registered callbacks on
     // every pass: the ST spins on its answer, so the loop never waits.
     chandler_loop();
@@ -652,7 +660,7 @@ void emul_start() {
     }
   }
 
-  // 10. Send RESET computer command
+  // 9. Send RESET computer command
   // Ok, so we are done with the setup but we want to reset the computer to
   // reboot in the same microfirmware app or start the booster app
 

@@ -129,7 +129,7 @@ See `programming.md` for the full table and budget rules.
 - `network.c`, `httpc/`, `download.c` — Wi-Fi (CYW43, lwIP poll mode), HTTPS-capable HTTP client, firmware download support.
 - `sdcard.c`, `hw_config.c` — FatFs over SPI/SDIO via the bundled `fatfs-sdk`.
 - `display.c`, `display_term.c`, `term.c`, `u8g2/` — terminal-style display rendered into the Atari framebuffer at `$FAE0C0` and/or a local OLED.
-- `blink.c`, `select.c`, `reset.c`, `tprotocol.c` — LED Morse status, SELECT-button helpers (debounce, short/long press callbacks — **not wired up**: `emul.c` only calls `select_configure()` and prints the pin state, so pressing SELECT does nothing in this template; never use `select_coreWaitPush()`, which launches core 1 and can fault both cores during a flash erase), soft reset/jump-to-booster, command-protocol parser and `TPROTO_*` payload accessors.
+- `blink.c`, `select.c`, `reset.c`, `tprotocol.c` — LED Morse status, the SELECT button, soft reset/jump-to-booster, command-protocol parser and `TPROTO_*` payload accessors.
 
 ### Command path (Atari ST → RP2040)
 The cartridge port is read-only, so the m68k sends commands by *reading* from addresses inside ROM3 (`$FB0000`+); the low 16 bits of each address are the data. `tprotocol.c` reassembles that address stream into framed commands (`0xABCD` header, command id, payload size, payload, checksum).
@@ -145,7 +145,8 @@ m68k reads $FB….  →  commemul PIO+DMA ring  →  chandler_loop()  →  tprot
 ```
 
 - Register handlers with `chandler_addCB(cb)` after `chandler_init()`; signature is `void cb(TransmissionProtocol *p, uint16_t *payloadPtr)`, with `payloadPtr` already advanced past the 32-bit random token. Read parameters via the `TPROTO_GET_*` macros and write results back with `memfunc.h` helpers — never with raw pointer arithmetic, because of the endianness swap.
-- **`chandler_loop()` must be called from every loop that can block.** The main loop calls it, and so must any long-running wait: `emul.c` installs `emul_pollTick` (`chandler_loop(); term_loop();`) via `network_setPollingCallback()` for the multi-second Wi-Fi connect. Passing `term_loop` alone drops commands.
+- **`chandler_loop()` must be called from every loop that can block.** The main loop calls it, and so must any long-running wait: `emul.c` installs `emul_pollTick` (`chandler_loop(); term_loop(); select_poll();`) via `network_setPollingCallback()` for the multi-second Wi-Fi connect. Passing `term_loop` alone drops commands.
+- **SELECT is watched on core 0 by `select_poll()`, which never blocks.** Call it wherever `chandler_loop()` is called (the main loop and `emul_pollTick` do). A GPIO edge interrupt records a press made while no loop could poll, and the poll handles it later. A short press restarts the RP. A press held for `SELECT_LONG_RESET` (10 s) is a factory reset: `reset_deviceAndEraseFlash()` erases the global settings, and Booster then clears every app's settings. `select_configure()` runs right after the display comes up, before the SD card and the network. Nothing starts core 1. A SELECT watcher on core 1 ran the long press's flash erase while core 0 executed from the same flash, and both cores faulted until a power cycle. `tools/dev/select_harness.py` checks the presses over SWD.
 - The m68k waiter requires the RP to advance `RANDOM_TOKEN_SEED` (a strictly-incrementing counter), not just echo `RANDOM_TOKEN` — echoing alone is indistinguishable from open-bus reads when no cartridge is present. Preserve that invariant in `chandler.c`.
 
 #### What each side may assume about the other
