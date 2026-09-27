@@ -77,9 +77,16 @@
 #define CHANDLER_REGION_END        0x10000  /* 64 KB shared region top */
 
 // Index for the common shared variables
-#define CHANDLER_HARDWARE_TYPE 0
-#define CHANDLER_SVERSION 1
+#define CHANDLER_HARDWARE_TYPE 0  // the ST's _MCH cookie, 0 for an ST
+#define CHANDLER_SVERSION 1       // ROM TOS version << 16 | GEMDOS Sversion
 #define CHANDLER_BUFFER_TYPE 2
+
+// Commands chandler answers itself, before any registered callback sees them.
+// Their app number is out of the way of the apps' own (the terminal is 0).
+#define CHANDLER_APP_FRAMEWORK 0xFF
+// Set shared variable d3 to d4. Sent by the m68k's detect_hw and
+// get_tos_version at every boot (CMD_SET_SHARED_VAR in main.s).
+#define CHANDLER_SET_SHARED_VAR ((CHANDLER_APP_FRAMEWORK << 8) | 0x00)
 
 // Maximum number of command callbacks that may be registered with
 // chandler_addCB. Pick a small bound so a buggy app cannot leak

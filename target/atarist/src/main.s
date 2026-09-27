@@ -87,8 +87,8 @@ SHARED_VARIABLES:         equ (RESERVED_SLOT_ADDR + 4)       ; $FA2010 (60 index
 ROMCMD_START_ADDR:        equ $FB0000					  ; We are going to use ROM3 address
 CMD_MAGIC_NUMBER    	  equ ($ABCD) 					  ; Magic number header to identify a command
 CMD_RETRIES_COUNT	  	  equ 3							  ; Number of retries for the command
-CMD_SET_SHARED_VAR		  equ 1							  ; This is a fake command to set the shared variables
-														  ; Used to store the system settings
+CMD_SET_SHARED_VAR		  equ $FF00						  ; Set shared variable d3 to d4. Answered by the RP's
+														  ; chandler itself (CHANDLER_SET_SHARED_VAR)
 ; App commands for the terminal
 APP_TERMINAL 				equ $0 ; The terminal app
 
@@ -234,6 +234,12 @@ pre_auto:
 start_rom_code:
 ; We assume the screen memory address is in D0 after the get_screen_base call
 	move.l d0, a6				; Save the screen memory address in A6
+
+; Tell the RP which machine and TOS this is, in shared variables 0 and 1. The
+; senders' Mega STE and 68030 checks read the machine from there. detect_hw
+; waits until the RP answers; the senders keep a6.
+	bsr detect_hw
+	bsr get_tos_version
 
 ; Enable bconin to return shift key status
 	or.b #%1000, _conterm.w

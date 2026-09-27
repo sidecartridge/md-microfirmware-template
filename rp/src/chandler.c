@@ -196,8 +196,22 @@ void __not_in_flash_func(chandler_loop)() {
   // Jump the random token
   TPROTO_NEXT32_PAYLOAD_PTR(payloadPtr);
 
-  for (CommandCallbackNode *cur = callbackListHead; cur; cur = cur->next) {
-    if (cur->cb) cur->cb(&pendingProtocol, payloadPtr);
+  if (commandId == CHANDLER_SET_SHARED_VAR) {
+    // The framework's own command: no callback sees it.
+    uint32_t index = TPROTO_GET_PAYLOAD_PARAM32(payloadPtr);
+    TPROTO_NEXT32_PAYLOAD_PTR(payloadPtr);
+    uint32_t value = TPROTO_GET_PAYLOAD_PARAM32(payloadPtr);
+    if (index < CHANDLER_SHARED_VARIABLES_SLOTS) {
+      SET_SHARED_VAR(index, value, (uint32_t)&__rom_in_ram_start__,
+                     CHANDLER_SHARED_VARIABLES_OFFSET);
+    } else {
+      DPRINTF("Shared variable %lu is past the %u slots; ignored\n",
+              (unsigned long)index, (unsigned)CHANDLER_SHARED_VARIABLES_SLOTS);
+    }
+  } else {
+    for (CommandCallbackNode *cur = callbackListHead; cur; cur = cur->next) {
+      if (cur->cb) cur->cb(&pendingProtocol, payloadPtr);
+    }
   }
 
   incrementalCmdCount++;
