@@ -16,6 +16,7 @@
 #include "commemul.h"
 #include "constants.h"
 #include "debug.h"
+#include "devhooks.h"  // Debug-only SWD mailbox; include in this file only
 #include "display.h"
 #include "ff.h"
 #include "gconfig.h"
@@ -80,6 +81,43 @@ static absolute_time_t menuRefreshTime;
 
 // Polling tick used as the network poll callback so command handling stays
 // alive during multi-second WiFi operations.
+#if defined(_DEBUG) && (_DEBUG != 0)
+// Heap held on request by `swd.py app heap_hold`, to test running out of it.
+typedef struct DevhooksHeldBlock {
+  struct DevhooksHeldBlock *next;
+} DevhooksHeldBlock;
+static DevhooksHeldBlock *devhooksHeldHeap = NULL;
+
+// App commands sent over SWD by tools/dev/swd.py (see emul.h).
+static uint32_t emul_devhooksApp(uint16_t commandId, const uint16_t *payload,
+                                 uint16_t payloadSize) {
+  switch (commandId) {
+    case DEVHOOKS_APP_HEAP_HOLD: {
+      uint32_t kb = (payloadSize >= 2u) ? payload[0] : 0u;
+      if (kb == 0u) {
+        while (devhooksHeldHeap != NULL) {
+          DevhooksHeldBlock *next = devhooksHeldHeap->next;
+          free(devhooksHeldHeap);
+          devhooksHeldHeap = next;
+        }
+        DPRINTF("devhooks: heap hold released\n");
+        return 1;
+      }
+      DevhooksHeldBlock *block = malloc(sizeof(DevhooksHeldBlock) + kb * 1024u);
+      if (block != NULL) {
+        block->next = devhooksHeldHeap;
+        devhooksHeldHeap = block;
+      }
+      DPRINTF("devhooks: holding %lu KB more heap: %s\n", (unsigned long)kb,
+              (block != NULL) ? "ok" : "refused");
+      return (block != NULL) ? 1u : 0u;
+    }
+    default:
+      return 0;
+  }
+}
+#endif
+
 static void __not_in_flash_func(emul_pollTick)(void) {
   chandler_loop();
   term_loop();
@@ -468,8 +506,12 @@ void emul_start() {
   // app, handling the user input, and performing the tasks of the app.
   // The main loop runs until the user decides to exit.
   // For testing purposes, this app only shows commands to manage the settings
+  // Debug builds only: serve the SWD mailbox of tools/dev/swd.py
+  devhooks_setAppHandler(emul_devhooksApp);
+
   DPRINTF("Start the app loop here\n");
   while (getKeepActive()) {
+    devhooks_poll();
 #if PICO_CYW43_ARCH_POLL
     network_safePoll();
     cyw43_arch_wait_for_work_until(make_timeout_time_ms(SLEEP_LOOP_MS));

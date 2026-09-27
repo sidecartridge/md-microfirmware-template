@@ -19,4 +19,11 @@
  */
 void emul_start();
 
+// App commands for `tools/dev/swd.py app NAME [WORDS...]`, debug builds only;
+// the name after DEVHOOKS_APP_ is the one the tool takes.
+//   heap_hold KB   hold KB more kilobytes of heap (0 releases everything);
+//                  answers 0 when the allocation is refused, so repeated calls
+//                  walk the heap down to a known remainder.
+#define DEVHOOKS_APP_HEAP_HOLD 1
+
 #endif  // EMUL_H

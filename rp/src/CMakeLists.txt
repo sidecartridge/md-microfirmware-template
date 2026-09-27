@@ -206,8 +206,10 @@ if(NOT RELEASE_DATE)
         set(RELEASE_DATE ${CURRENT_DATE_TIME})
 endif()
 
+# DEBUG_MODE is "0" for a release build, which CMake reads as false: defaulting
+# to 1 here made every release build a debug build. Unset means release too.
 if (NOT _DEBUG)
-        set(_DEBUG 1)
+        set(_DEBUG 0)
 endif()
 
 # Debug outputs
@@ -217,6 +219,12 @@ if(${_DEBUG} STREQUAL "0")
     pico_enable_stdio_uart(${PROJECT_NAME} 0)
 else()
     pico_enable_stdio_uart(${PROJECT_NAME} 1)
+    # 921,600 baud, not the SDK's 115,200: DPRINTF blocks on the UART, and on a
+    # timing-sensitive cartridge bus a chatty console at 115,200 delays the
+    # firmware enough to change behavior. The UART clock error at this rate is
+    # 0.02 %. Set the serial terminal (tools/dev/console.py) to 921600.
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+        PICO_DEFAULT_UART_BAUD_RATE=921600)
 endif()
 
 # Print the variables on screen
@@ -253,11 +261,26 @@ add_definitions(-DPICO_FLASH_ASSUME_CORE0_SAFE=1)
 # Select HTTPS or HTTP downloads of the firmware
 add_definitions(-DAPP_DOWNLOAD_HTTPS=0)
 
-# Remove unused data
-target_link_options(${PROJECT_NAME} PRIVATE
-   "-Wl,--gc-sections"
-   "-Wl,--strip-all"
-)
+# build_id.h and build_id.c (RELEASE_BUILD_ID and the release_build_id symbol,
+# the git commit) are regenerated on every build; see build_id.cmake. They are
+# rewritten only when the ID changes, so only their users recompile. The symbol
+# is kept through --gc-sections so tools/dev/swd.py can read it over SWD.
+set(BUILD_ID_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated/build_id)
+add_custom_target(build_id
+    COMMAND ${CMAKE_COMMAND} -DSRC_DIR=${CMAKE_CURRENT_LIST_DIR}
+            -DOUT_DIR=${BUILD_ID_DIR} -P ${CMAKE_CURRENT_LIST_DIR}/build_id.cmake
+    BYPRODUCTS ${BUILD_ID_DIR}/build_id.h ${BUILD_ID_DIR}/build_id.c
+    COMMENT "Checking the build ID")
+add_dependencies(${PROJECT_NAME} build_id)
+target_sources(${PROJECT_NAME} PRIVATE ${BUILD_ID_DIR}/build_id.c)
+set_source_files_properties(${BUILD_ID_DIR}/build_id.c PROPERTIES GENERATED TRUE)
+target_include_directories(${PROJECT_NAME} PRIVATE ${BUILD_ID_DIR})
+target_link_options(${PROJECT_NAME} PRIVATE "-Wl,--undefined=release_build_id")
+
+# Remove unused data. The ELF keeps its symbol table: it never reaches the
+# .uf2 (byte-identical either way), and tools/dev/swd.py finds the cartridge
+# window, the build ID and its other addresses by symbol.
+target_link_options(${PROJECT_NAME} PRIVATE "-Wl,--gc-sections")
 
 # Enable clang-tidy (you need to have clang-tidy installed on your system)
 find_program(CLANG_TIDY_EXE NAMES clang-tidy)

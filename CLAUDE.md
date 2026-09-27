@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-See also: `programming.md` (full shared-region table and budget rules), `README.md` (high-level region/userfw overview), `AGENTS.md` (overlapping playbook + troubleshooting table).
+See also: `programming.md` (full shared-region table and budget rules), `README.md` (high-level region/userfw overview), `AGENTS.md` (host setup, copy-pasteable commands, and a symptom → fix table).
 
 ## What this repo is
 
@@ -21,7 +21,7 @@ Top-level build is driven by `build.sh` in the repo root:
 
 Required host environment:
 - ARM GNU Toolchain 14.2 — export `PICO_TOOLCHAIN_PATH` to its `arm-none-eabi/bin` dir.
-- `atarist-toolkit-docker` (`stcmd`) — needed for the m68k target. `stcmd` requires a PTY (`pty=true`).
+- `atarist-toolkit-docker` (`stcmd`) — needed for the m68k target. It runs `docker run -it`, so it needs a TTY unless `STCMD_NO_TTY=1` is exported (the build scripts set it; see the gotcha below).
 - SDK paths (auto-set from the repo if unset): `PICO_SDK_PATH`, `PICO_EXTRAS_PATH`, `FATFS_SDK_PATH`.
 
 Build flow (orchestrated by `build.sh`):
@@ -33,17 +33,64 @@ Build flow (orchestrated by `build.sh`):
 ### Build gotchas
 - **CMake always builds with `-DCMAKE_BUILD_TYPE=MinSizeRel`** regardless of the `<build_type>` argument. A full `Release` previously caused breakage (memory/over-optimization). The legacy line is left commented in `rp/build.sh`. `<build_type>` only controls the `DEBUG_MODE` macro and the dist filename.
 - `CHARACTER_GAP_MS` must remain defined (700) in `rp/src/include/blink.h` — removing it breaks the RP build.
+- `rp/build.sh` runs `git submodule update --init --recursive` and hard-`checkout`s the pinned revisions on **every** build, and `build.sh` deletes and recreates `dist/` first — any local edit inside a submodule, or anything left in `dist/`, is gone on the next build.
 - Harmless VASM warnings during the m68k build (`target data type overflow`, `trailing garbage after option -D`) can be ignored.
 - VASM/`stcmd` errors like `the input device is not a TTY` mean `stcmd` was invoked without a PTY. `target/atarist/build.sh` already exports `STCMD_NO_TTY=1` for every `stcmd` call it makes; you only need to export it yourself if invoking `stcmd` directly from a non-TTY context (CI, sub-shells, build wrappers). Without it the m68k build can fail silently and the previous `BOOT.BIN` survives — leading to a working RP firmware that displays garbage on the ST because `target_firmware.h` is stale.
 
 ### CI / release
 - `.github/workflows/build.yml` builds `pico_w` Release on PR.
 - `.github/workflows/release.yml` triggers on `v*` tags: builds, attaches UF2 + JSON to the GitHub Release, uploads to `s3://atarist.sidecartridge.com/`.
-- `make tag` tags HEAD with the contents of `version.txt` and pushes the tag (which triggers release).
+- `make tag` tags HEAD with the contents of `version.txt` and pushes the tag (which triggers release). **In this template repo, don't tag** — a change lands as a `version.txt` bump plus a `CHANGELOG.md` entry; tagging/releasing is the repo owner's call. Apps generated from the template do tag.
 - `upload_s3.sh <file>` is a manual one-off uploader; needs `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`.
 
-### Tests
-There is no test suite. "Verification" is: build succeeds, UF2 boots on hardware, manual interaction over the serial debug console.
+### Tests / verification
+There is no test suite, and no way to run this off-hardware. "Verification" is: the build succeeds (including the 8 KB cartridge assertion), the UF2 boots on the device, and you interact with it manually over the serial debug console and the ST terminal menu.
+
+- `DPRINTF` / `DPRINTFRAW` (`rp/src/include/debug.h`) compile to nothing unless `_DEBUG != 0`, and `pico_enable_stdio_uart` is only turned on for debug builds — so a `release` UF2 prints nothing at all. Build with `./build.sh <board> debug <uuid>` to get a serial console. (Up to v1.2.1 `rp/src/CMakeLists.txt` turned `DEBUG_MODE=0` into `_DEBUG=1`, so every "release" build was a debug build; if a release build ever prints, check `-D_DEBUG=` in its `flags.make`.)
+- On-chip debugging is via a Picoprobe/Debug Probe and the `cortex-debug` VS Code launch config in `.vscode/launch.json`; it needs `ARM_GDB_PATH` and `PICO_OPENOCD_PATH` exported. CMake source dir is `rp/src`, build dir is `rp/build`.
+- The m68k side has no debugger: its only observable output is what it prints on the ST screen.
+
+With a Raspberry Pi Debug Probe attached, `tools/dev/` turns that manual loop into something
+repeatable (its `README.md` has the full command list):
+
+- `console.py watch` captures the debug UART (921,600 baud) to `tools/dev/logs/console.log` with
+  timestamps, and `since-boot` / `grep` / `wait` query the log while it runs. Only one program can
+  hold the port, so use this instead of a serial terminal; other tools read the log, not the port.
+  `wait` only matches lines that arrive after it starts.
+- `flash.sh <debug|release>` builds out of tree in `tools/dev/builds/` incrementally (seconds, not
+  a full rebuild), flashes over USB or the probe, then verifies over SWD that the RP booted the
+  ELF, that its flash matches byte for byte, and that it carries the expected build ID.
+- `swd.py` reads a *running* RP over SWD: `screen` renders the framebuffer as the ST sees it
+  (a PNG), `text` prints the terminal buffer, `shared` dumps the sentinel/token/shared variables,
+  `heap` reads newlib's allocator, `crash` explains the last reboot and `postmortem` halts for
+  backtraces. On debug builds `key`, `inject` and `app` drive the firmware through the devhooks
+  mailbox (`rp/src/include/devhooks.h`): `swd.py key h` then `swd.py key $'\n'` runs the `h`
+  menu command, `swd.py app heap_hold 16` holds 16 KB of heap. They rely on the ELF keeping its
+  symbols and on the build ID in flash; both are part of every build.
+- Neither this firmware nor the siblings expose picotool's USB reset interface, so `flash.sh`
+  flashes through the probe (about 25 s with verification).
+- Flash through the probe only with `swd.py program` (or `flash.sh --probe`, which uses it), never
+  with OpenOCD's own `program`: halting the cores does not stop the RP2040's DMA, and while the ST
+  touches the cartridge the ROM3 capture ring writes bus samples into the RAM the flash write is
+  staged in. `swd.py program` stops every PIO state machine and DMA channel first.
+
+### Planning backlog (`docs/`)
+`docs/epics/` holds the local planning notes (`cockpit.sh` regenerates `STATUS.md`; `ITERATIONS.md`
+carries the narrative; `DECISIONS.md` the decisions and standing constraints). **The whole `docs/`
+tree is gitignored** and lives only on the developer's machine.
+
+- **Never name an epic, story, iteration or task in anything that is committed** — code comments,
+  documentation, `CHANGELOG.md`, commit messages, PR descriptions. An identifier like
+  `EPIC-03 STORY-01` tells a reader of this repository nothing and cannot be looked up, and a
+  commit message cannot be scrubbed afterwards. Write what the code does and why instead: *"the
+  heap limit now stops at the start of the cartridge mirror"*, not a pointer to a planning note.
+- **Never reference a path under `docs/`** from anything that ships, for the same reason: someone
+  who clones the repo has no `docs/`. Inline the information itself.
+- Traceability runs the other way: once work lands, record the commit hash in the planning note.
+- Before tagging a release, check:
+  `git grep -IiE "EPIC-|STORY-|\bepics?\b|\bstor(y|ies)\b|docs/" -- . ':!CLAUDE.md' ':!.gitignore'`
+  must come back empty (this section and the `.gitignore` entry are the only places the backlog
+  is mentioned).
 
 ## Architecture
 
@@ -62,7 +109,8 @@ The Atari ST sees a 64 KB window at `$FA0000`–`$FAFFFF` (mirrored RP-side at `
 | --- | --- | --- | --- |
 | `$FA0000` | cartridge image | 8 KB | m68k header + all `.text_*` sections (hard limit) |
 | `$FA2000` | `CMD_MAGIC_SENTINEL` | 4 B | m68k polls here for NOP/RESET/command words |
-| `$FA2004` | `RANDOM_TOKEN`, `RANDOM_TOKEN_SEED`, 60 × 4 B indexed shared variables | ~768 B | fixed-offset metadata block (first 512 B until `$FA2300`) |
+| `$FA2004` | `RANDOM_TOKEN`, `RANDOM_TOKEN_SEED`, reserved, then 60 × 4 B indexed shared variables | 256 B | fixed-offset metadata block, ends at `$FA2100` |
+| `$FA2100` | high-res translation table | 512 B | start of `APP_BUFFERS` |
 | `$FA2300` | `APP_FREE` | ~48 KB | contiguous arena for app buffers |
 | `$FAE0C0` | `FRAMEBUFFER` | 8000 B | 320×200 monochrome framebuffer; sits at the top of the region so an overrun walks off the end of the 64 KB window instead of corrupting the metadata block |
 
@@ -70,13 +118,55 @@ See `programming.md` for the full table and budget rules.
 
 ### RP2040 side (`rp/src/`)
 - `main.c` — only sets clock/voltage, calls `gconfig_init` (global config) then `aconfig_init` (per-app config), and hands off to `emul_start()`. If config init fails it jumps to the **Booster** app via `reset_jump_to_booster()` to bootstrap. **Don't add features to `main.c`** — put them in `emul.c` or a new module.
-- `emul.c` / `emul.h` — the application's main loop and entry point. This is where to add new features.
-- `romemul.c` / `romemul.pio` — PIO programs and the runtime that emulates the cartridge ROM/RAM bus to the Atari (driven by `READ_*` / `WRITE_*` GPIOs defined in `include/constants.h`).
+- `emul.c` / `emul.h` — the application's main loop and entry point. This is where to add new features. `emul_start()` runs the fixed bring-up order: copy `target_firmware` into `ROM_IN_RAM` → `init_romemul(false)` → `commemul_init()` → `chandler_init()` + `chandler_addCB(...)` → display → SD → network → `init()` → main loop. The RP-side terminal UI is a `commands[]` table (`{"f", cmdFirmware}`, …) handed to `term_setCommands()`; add a menu command by adding a row plus its handler.
+- `romemul.c` / `romemul.pio` — ROM4 **read** engine: a PIO SM latches the 16-bit address, and a chained DMA pair reads that offset out of `ROM_IN_RAM` and pushes it to the PIO TX FIFO. Fully DMA-driven, no IRQ, no CPU. Driven by the `READ_*` / `WRITE_*` GPIOs in `include/constants.h`. Changing these files produces very strange bugs.
+- `commemul.c` / `commemul.pio` — ROM3 **command** capture: a PIO SM on `ROM3_GPIO` plus one ring-mode DMA channel continuously records every ROM3 access into a 16 384-word ring. Drained by polling (`commemul_poll`), never by IRQ.
+- `chandler.c` / `include/chandler.h` — the polled command dispatcher on top of `commemul` + `tprotocol`, and the RP-side source of truth for the shared-region offsets (`CHANDLER_*`).
 - `gconfig.c` / `aconfig.c` — global vs per-app configuration stored in dedicated flash sectors, on top of `settings/` (a key-value store).
 - `network.c`, `httpc/`, `download.c` — Wi-Fi (CYW43, lwIP poll mode), HTTPS-capable HTTP client, firmware download support.
 - `sdcard.c`, `hw_config.c` — FatFs over SPI/SDIO via the bundled `fatfs-sdk`.
 - `display.c`, `display_term.c`, `term.c`, `u8g2/` — terminal-style display rendered into the Atari framebuffer at `$FAE0C0` and/or a local OLED.
-- `blink.c`, `select.c`, `reset.c`, `tprotocol.c` — LED Morse status, SELECT-button handling, soft reset/jump-to-booster, transport protocol primitives.
+- `blink.c`, `select.c`, `reset.c`, `tprotocol.c` — LED Morse status, SELECT-button helpers (debounce, short/long press callbacks — **not wired up**: `emul.c` only calls `select_configure()` and prints the pin state, so pressing SELECT does nothing in this template; never use `select_coreWaitPush()`, which launches core 1 and can fault both cores during a flash erase), soft reset/jump-to-booster, command-protocol parser and `TPROTO_*` payload accessors.
+
+### Command path (Atari ST → RP2040)
+The cartridge port is read-only, so the m68k sends commands by *reading* from addresses inside ROM3 (`$FB0000`+); the low 16 bits of each address are the data. `tprotocol.c` reassembles that address stream into framed commands (`0xABCD` header, command id, payload size, payload, checksum).
+
+The whole path is **polled, not interrupt-driven** (since template v1.1.0):
+
+```
+m68k reads $FB….  →  commemul PIO+DMA ring  →  chandler_loop()  →  tprotocol_parse
+                                                      ↓ (complete + checksummed)
+                                        registered callbacks, in registration order
+                                                      ↓
+                        chandler writes the random-token reply into shared memory
+```
+
+- Register handlers with `chandler_addCB(cb)` after `chandler_init()`; signature is `void cb(TransmissionProtocol *p, uint16_t *payloadPtr)`, with `payloadPtr` already advanced past the 32-bit random token. Read parameters via the `TPROTO_GET_*` macros and write results back with `memfunc.h` helpers — never with raw pointer arithmetic, because of the endianness swap.
+- **`chandler_loop()` must be called from every loop that can block.** The main loop calls it, and so must any long-running wait: `emul.c` installs `emul_pollTick` (`chandler_loop(); term_loop();`) via `network_setPollingCallback()` for the multi-second Wi-Fi connect. Passing `term_loop` alone drops commands.
+- The m68k waiter requires the RP to advance `RANDOM_TOKEN_SEED` (a strictly-incrementing counter), not just echo `RANDOM_TOKEN` — echoing alone is indistinguishable from open-bus reads when no cartridge is present. Preserve that invariant in `chandler.c`.
+
+#### What each side may assume about the other
+The ST side is `target/atarist/src/inc/sidecart_functions.s` (`send_sync_command_to_sidecart` and its write variant, wrapped by the `send_sync` / `send_write_sync` macros); the RP side is `chandler.c` + `tprotocol.h`. Rules that hold across both, each learned on hardware:
+
+- **The ST's timeout is a spin count, not time, and it is per file.** `COMMAND_TIMEOUT` (`$FFFF`) counts iterations of the token-compare loop, so it shrinks as the CPU gets faster, and each module that includes `inc/sidecart_functions.s` has its own copy.
+- **On a Mega STE the cache must be off while the ST talks to the cartridge; the speed does not matter.** Measured on a Mega STE (TOS 2.06): at 16 MHz without the cache commands work as at 8 MHz; with the cache on they never reach the RP. Clear bit 0 of `$FFFF8E21` around cartridge traffic and put the user's setting back after; do not step the machine down to 8 MHz. The template does not do this yet.
+- **What a send keeps.** `send_sync` keeps d1-d6 and destroys d0, d7, a0-a3. `send_write_sync` keeps d1-d5 and a4 and destroys d0, d6 (its retry count), d7, a0-a3. Both leave a0-a3 pointing into the ROM3 command window: a payload read through them is itself sampled by the RP and fails the checksum on every retry. Take what you need into a kept register before the send.
+- **A 68030 (TT, Falcon) runs code copied into RAM from a stale instruction cache** unless it is cleared after the copy (CACR's CI bit). This applies to the senders' wait loop when `COMMAND_SYNC_USE_DSKBUF` is not 0, and to anything else copied into RAM and run.
+- **End every m68k module with a NOP tail** after `include "inc/sidecart_functions.s"` (`even`, eight `nop`s, a `<module>_end:` label). `firmware.py` strips trailing zeros, the RP copies only `target_firmware_length` words, and the write sender and the 68000's prefetch read past the end of the loop: without the tail those bytes are uninitialised RP RAM.
+- **A retry is a new command.** The macros resend up to `CMD_RETRIES_COUNT` times, each with a *fresh* token (the token is the seed read just before sending). The RP may already have executed the first attempt, so a command must be idempotent or carry its own sequence number.
+- **Token + seed is a two-phase commit.** The RP stores the token and then the seed; the ST accepts an answer only when the token matches *and* the seed has moved. That also covers absent hardware and a freshly zeroed window.
+- **The sentinel is a level, not a queue.** The ST samples `CMD_MAGIC_SENTINEL` once per vsync, only while it is in its poll loop — not inside `send_sync`, not after `jmp USERFW`. A value written once and then replaced can be missed.
+- **The two sides reboot independently.** The RP rewrites the 64 KB window when it boots, so anything the ST published at its own cold boot is gone after an RP-only reboot. The ST's print loop survives that (it runs from RAM and is stateless); `rom_function` does `jmp USERFW` into cartridge ROM, so user firmware that must outlive an RP reboot or a reflash has to relocate itself to RAM first.
+- **Answer first.** In `chandler_loop()` the token write is what releases the ST; an LED pulse (on a Pico W that is a CYW43 bus transaction), a blocking `DPRINTF`, or any other slow work goes after it.
+
+Known defects in this path as the code stands — check before building on it:
+
+- `tprotocol_parse` stores payload words until it has read the payload size taken off the bus, with no check against `MAX_PROTOCOL_PAYLOAD_SIZE` (`rp/src/include/tprotocol.h`, `PAYLOAD_SIZE_READ`): a stray `$ABCD` followed by a large size word writes past the 2 KB payload buffer.
+- `tprotocol_parse` refreshes `tprotocol_last_header_found` only while hunting a header (`rp/src/include/tprotocol.h`), so `PROTOCOL_READ_RESTART_MICROSECONDS` (10 ms) is a deadline for the *whole frame*. Samples are timestamped when parsed, in batches, and the main loop sleeps up to `SLEEP_LOOP_MS` = 100 ms between drains (`rp/src/emul.c`): a frame that spans two drains is discarded, and the ST waits out its timeout and resends. Keystrokes fit in one drain; real payloads do not.
+- The main loop drains the ring only *after* its up-to-100 ms wait, so every command can sit that long. During the Wi-Fi connect the polling callback runs once per up-to-2 s wait (`rp/src/network.c`), longer than the ST's whole retry budget.
+- Since v1.2.1 both `send_sync` routines return with Z **clear** on success (`d0` = 0). The macros `tst.w d0` themselves and are safe; code that calls the routines directly and branches on the flags reads every success as an error. Test `d0`.
+- A debug build prints its banner, the flash layout and the settings dumps *before* `emul_start()` makes the cartridge live, so a power-cycled ST can boot into GEM on a debug build and into the menu on a release build. At 921,600 baud this takes an eighth of the time it took at 115,200; whether it still loses the race is not measured yet.
+- The settings dump and `network.c`'s connect traces print the Wi-Fi password in clear on debug builds.
 
 ### Memory layout (`rp/src/memmap_rp.ld`)
 The RP2040's 2 MB flash is sliced into named regions, and code is responsible for not stomping on them:
@@ -89,8 +179,13 @@ The RP2040's 2 MB flash is sliced into named regions, and code is responsible fo
 | `CONFIG_FLASH` | `0x101E0000` | 120 K | 30 sectors of per-app config |
 | `GLOBAL_LOOKUP_FLASH` | `0x101FE000` | 4 K | UUID → config-sector lookup |
 | `GLOBAL_CONFIG_FLASH` | `0x101FF000` | 4 K | Global config |
-| `RAM` | `0x20000000` | 128 K | Normal RAM |
-| `ROM_IN_RAM` | `0x20020000` | 128 K | ROM data mirrored to RAM for fast bus access |
+| `RAM` | `0x20000000` | 192 K | Normal RAM (data, BSS, heap) |
+| `ROM_IN_RAM` | `0x20030000` | 64 K | The cartridge window the ST reads at `$FA0000` |
+| `SCRATCH_X` / `SCRATCH_Y` | `0x20040000` / `0x20041000` | 4 K each | Core 1 / core 0 stacks (SDK default: 2 K reserved for core 0) |
+
+The heap's limit, `__StackLimit`, is `ORIGIN(RAM) + LENGTH(RAM) + LENGTH(ROM_IN_RAM)`, so as the
+script stands the heap can grow into the cartridge window and overwrite the image the ST is
+reading. `tools/dev/swd.py heap` reports a heap size that includes the window for that reason.
 
 The build assumes Core 0 owns flash writes (`PICO_FLASH_ASSUME_CORE0_SAFE=1`). The PIO bus emulation runs hot — Core 0 also overclocks to 225 MHz at `VREG_VOLTAGE_1_10`.
 
@@ -111,7 +206,7 @@ For an assistant that does not read this file automatically, the same guide publ
 
 - **Never modify** `pico-sdk/`, `pico-extras/`, or `fatfs-sdk/` — they are git submodules pinned to specific upstream revisions, and the build re-pins them on every run. To change FatFs configuration, edit `rp/src/ff/ffconf.h` (project-owned override); the include path is set up so this file wins over the submodule's default.
 - Don't touch `main.c` for feature work — start in `emul.c`.
-- Match the existing C style (clang-format config in `.clang-format`, clang-tidy in `.clang-tidy` — both wired up via CMake when the binaries are on `PATH`).
+- Match the existing C style (clang-format config in `.clang-format`, clang-tidy in `.clang-tidy`). VS Code runs both. The clang-tidy block in `rp/src/CMakeLists.txt` sets `CMAKE_C_CLANG_TIDY` after the target already exists, so it has never run from a command-line build — a clean build is not a clang-tidy pass.
 
 ---
 
