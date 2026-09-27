@@ -271,10 +271,13 @@ add_definitions(-DAPP_DOWNLOAD_HTTPS=0)
 # the git commit) are regenerated on every build; see build_id.cmake. They are
 # rewritten only when the ID changes, so only their users recompile. The symbol
 # is kept through --gc-sections so tools/dev/swd.py can read it over SWD.
+# A debug build's ID ends in +debug, so a debug and a release build of one
+# tree cannot be taken for each other on the device.
 set(BUILD_ID_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated/build_id)
 add_custom_target(build_id
     COMMAND ${CMAKE_COMMAND} -DSRC_DIR=${CMAKE_CURRENT_LIST_DIR}
-            -DOUT_DIR=${BUILD_ID_DIR} -P ${CMAKE_CURRENT_LIST_DIR}/build_id.cmake
+            -DOUT_DIR=${BUILD_ID_DIR} -DDEBUG_BUILD=${_DEBUG}
+            -P ${CMAKE_CURRENT_LIST_DIR}/build_id.cmake
     BYPRODUCTS ${BUILD_ID_DIR}/build_id.h ${BUILD_ID_DIR}/build_id.c
     COMMENT "Checking the build ID")
 add_dependencies(${PROJECT_NAME} build_id)
