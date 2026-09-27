@@ -69,6 +69,7 @@ jobs:
         APP_UUID: ${{ secrets.APP_UUID }}
       run: ./build.sh pico_w ${{ matrix.build_type }} ${APP_UUID:-44444444-4444-4444-8444-444444444444}
 
+    # To the log as well: the job summary cannot be read back through the API.
     - name: Build report
       run: |
           {
@@ -79,4 +80,4 @@ jobs:
             arm-none-eabi-size rp/build/rp.elf
             cat dist/rp.uf2.md5sum
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
