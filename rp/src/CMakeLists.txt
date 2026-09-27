@@ -255,11 +255,10 @@ add_definitions(-DPICO_FLASH_ASSUME_CORE0_SAFE=1)
 # Select HTTPS or HTTP downloads of the firmware
 add_definitions(-DAPP_DOWNLOAD_HTTPS=0)
 
-# Remove unused data
-target_link_options(${PROJECT_NAME} PRIVATE
-   "-Wl,--gc-sections"
-   "-Wl,--strip-all"
-)
+# Remove unused data. The ELF keeps its symbol table: it never reaches the
+# .uf2 (byte-identical either way), and tools/dev/swd.py finds the cartridge
+# window, the build ID and its other addresses by symbol.
+target_link_options(${PROJECT_NAME} PRIVATE "-Wl,--gc-sections")
 
 # Enable clang-tidy (you need to have clang-tidy installed on your system)
 find_program(CLANG_TIDY_EXE NAMES clang-tidy)
