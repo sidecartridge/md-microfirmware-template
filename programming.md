@@ -1033,6 +1033,15 @@ How the exchange works, and what each side may assume:
 - **A Mega STE's cache must be off while the ST talks to the cartridge**; its speed does not matter. `main.s` handles the setup menu. User firmware wraps each send in `megaste_cache_off` / `megaste_cache_back`.
 - **A 68030 (TT, Falcon) needs its instruction cache cleared** after code is copied into RAM and run. The senders do it when they copy their wait loop.
 
+- **The cartridge window is read-only from the ST.** Writes to `$FA0000`-`$FAFFFF` are silently lost on the bus. The ST changes what the RP holds by sending a command, such as `CMD_SET_SHARED_VAR` below.
+
+If the user firmware hooks a trap (GEMDOS, BIOS, XBIOS) to stay resident, md-drives-emulator learned these on hardware:
+
+- **Push nothing on the caller's stack before knowing the call is yours.** TOS 1.04 starts GEM on a 132-byte stack and calls GEMDOS from it with about 110 bytes to spare; decide from `d0` (and `a0` for a user-mode caller) and run the calls you take on a stack of your own.
+- **Find the arguments where the caller left them.** From supervisor mode they are on `sp` (plus 2 when `_longframe` is set, on a 68010 or later); from user mode they are at `usp` as it is, since the format word goes on the supervisor stack only.
+- **Code reached from a trap's `rte` runs in the caller's mode.** In user mode the first 2 KB of memory is a bus error: no system variables there, and no sender that copies its wait loop (it reads `_dskbufp` at `$4C6`).
+- **Give the caller its registers back as TOS does**: every one but `d0` to a supervisor-mode caller, all but `a0` to a user-mode one. Programs count on it.
+
 `$FF00` (`CMD_SET_SHARED_VAR`, `CHANDLER_SET_SHARED_VAR` on the RP) is answered by the RP's chandler itself: "set shared variable d3 to d4". `main.s` uses it at every boot, through `detect_hw` and `get_tos_version`, to publish the machine (`_MCH` cookie, 0 for an ST) in shared variable 0 and the TOS version in variable 1.
 
 An example, a keystroke for the terminal:
