@@ -150,12 +150,51 @@ static void showTitle() {
       "Microfirmware test app - " RELEASE_VERSION "\n");
 }
 
+// What the ST told this RP at its boot: its hello, then its machine (the _MCH
+// cookie, shared variable 0) and its TOS (shared variable 1).
+static void atariLine(char *line, size_t size) {
+  if (!chandler_stPresent()) {
+    snprintf(line, size, "Atari     : no hello yet (reset the ST)");
+    return;
+  }
+  uint32_t machine = 0;
+  uint32_t versions = 0;
+  GET_SHARED_VAR(CHANDLER_HARDWARE_TYPE, &machine,
+                 (uint32_t)&__rom_in_ram_start__,
+                 CHANDLER_SHARED_VARIABLES_OFFSET);
+  GET_SHARED_VAR(CHANDLER_SVERSION, &versions, (uint32_t)&__rom_in_ram_start__,
+                 CHANDLER_SHARED_VARIABLES_OFFSET);
+  const char *name = NULL;
+  switch (machine) {
+    case 0x00000000: name = "ST"; break;
+    case 0x00010000: name = "STE"; break;
+    case 0x00010001: name = "ST Book"; break;
+    case 0x00010010: name = "Mega STE"; break;
+    case 0x00020000: name = "TT"; break;
+    case 0x00030000: name = "Falcon"; break;
+    default: break;
+  }
+  uint32_t tos = versions >> 16;
+  if (name != NULL) {
+    snprintf(line, size, "Atari     : %s, TOS %lx.%02lx", name,
+             (unsigned long)(tos >> 8), (unsigned long)(tos & 0xFF));
+  } else {
+    snprintf(line, size, "Atari     : _MCH %08lx, TOS %lx.%02lx",
+             (unsigned long)machine, (unsigned long)(tos >> 8),
+             (unsigned long)(tos & 0xFF));
+  }
+}
+static char atariLineShown[TERM_SCREEN_SIZE_X] = {0};
+
 static void menu(void) {
   menuScreenActive = true;
   showTitle();
-  term_printString("\n\n");
+  term_printString("\n");
   term_printString("[S]ettings     | [F]irmware launch\n");
   term_printString("[E]xit desktop | [X] Back to Booster\n\n");
+  atariLine(atariLineShown, sizeof(atariLineShown));
+  term_printString(atariLineShown);
+  term_printString("\n");
 
   // Display network information
   term_printNetworkInfo();
@@ -585,6 +624,12 @@ void emul_start() {
       bool hasPendingInput = (input != NULL) && (input[0] != '\0');
       if (!hasPendingInput &&
           (absolute_time_diff_us(get_absolute_time(), menuRefreshTime) <= 0)) {
+        char line[TERM_SCREEN_SIZE_X];
+        atariLine(line, sizeof(line));
+        if (strcmp(line, atariLineShown) != 0) {
+          menu();  // what the ST told us changed: draw it all again
+          display_refresh();
+        }
         term_refreshMenuLiveInfo();
         menuRefreshTime = make_timeout_time_ms(MENU_REFRESH_TIME_MS);
       }
