@@ -579,7 +579,7 @@ if (wifiMode == NULL) {
 In this example, we check if the WiFi mode is set to STA. If it is, we initialize the network and connect to the WiFi network. The code blocks until the connection is established or the maximum number of attempts is reached. If the connection is not established, we return an error code. The `network_setPollingCallback` allows to set a callback function that will be called during the polling period. This is useful to handle the network events and update the UI.
 
 {: .note}
-The polling callback should drain the ROM3 command ring **and** the terminal loop so that commands sent during the multi-second WiFi connect window are not dropped. The template ships an `emul_pollTick` helper that calls `chandler_loop(); term_loop();` and installs it via `network_setPollingCallback(emul_pollTick);` while the connect is in flight. Apps that pass `term_loop` directly will leak commands during connect.
+The polling callback should drain the ROM3 command ring **and** the terminal loop so that commands sent during the multi-second WiFi connect window are not dropped. The template ships an `emul_pollTick` helper that calls `chandler_loop(); term_loop(); select_poll();` and installs it via `network_setPollingCallback(emul_pollTick);` while the connect is in flight. Apps that pass `term_loop` directly will leak commands during connect.
 
 To keep the code simple, give up the app if the network connection is not established. If the connection is successful, continue with the critical path of the app.
 
@@ -676,25 +676,24 @@ This module is responsible for handling the SELECT button on the device.
 
 The SELECT can have two different functions:
 
-- Short SELECT: Push and release immediately. This is used to return to the configuration menu of the app.
-- Long SELECT: Push and hold for more than ten (10) seconds. This is used to reset the device and erase the flash memory, returning to the Booster app.
+- Short SELECT: Push and release. The template restarts the RP, which brings the app back to its configuration menu.
+- Long SELECT: Push and hold for ten (10) seconds (`SELECT_LONG_RESET`). This is a factory reset: `reset_deviceAndEraseFlash()` erases the global settings and the device restarts into the Booster app, which then clears the settings of every app.
 
-In this example we will implement the long SELECT function. The short SELECT is only implemented with pure status checks, but the long SELECT is implemented with a callback function. Both can be configured as callback functions.
+`select_poll()` runs the button's state machine and never blocks. It debounces over 30 ms and calls the long-press callback as soon as the button has been held for `SELECT_LONG_RESET`; otherwise it calls the short-press callback on release. Call it from the main loop and from every long wait, next to `chandler_loop()`. A GPIO edge interrupt set up by `select_configure()` records a press that started and ended while nothing could poll, and the next call handles it.
 
 ```c
 select_configure();
+select_setResetCallback(reset_device);
 select_setLongResetCallback(reset_deviceAndEraseFlash);
 
-// Wait until SELECT is pressed
-while (!select_detectPush()) {
-  // Run the ROM emulation state machine
-  sleep_ms(SLEEP_LOOP_MS);
+while (keepActive) {
+  select_poll();    // never blocks
+  chandler_loop();  // commands from the ST
+  // ... the rest of the app
 }
-// Select button pressed. Wait until it is released
-select_waitPush();
 ```
 
-In the main loop of the critical path of the app, we check if the SELECT button is pressed. If it is, we wait until it is released. This is a blocking call, so the app will wait until the SELECT button is released.
+Keep SELECT on core 0. A watcher on core 1 ran the long press's flash erase while core 0 executed from the same flash, and both cores faulted until a power cycle.
 
 ##### term.c 
 

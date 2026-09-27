@@ -526,7 +526,9 @@ def heap_snapshot(elf: str) -> dict:
         return struct.unpack_from("<I", heap, addr - base)[0]
 
     used = free = largest = free_chunks = 0
-    p = base
+    # The first chunk is not always at the sbrk base: malloc moves it forward
+    # so that its user pointer (chunk + 8) is 8-byte aligned.
+    p = base + (-(base + 8) & 7)
     while p < top:
         size = word(p + 4) & ~3
         if size < 16 or p + size > top:

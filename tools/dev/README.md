@@ -88,6 +88,11 @@ python3 tools/dev/swd.py shared                                  # token + share
 python3 tools/dev/swd.py resume                                  # release cores a debugger left halted
 python3 tools/dev/swd.py reset                                   # reset the whole chip, watchdog-style
 python3 tools/dev/swd.py select short                            # press SELECT (short press)
+python3 tools/dev/select_harness.py bounce                       # 15 ms press: ignored
+python3 tools/dev/select_harness.py short                        # short press: the RP restarts
+python3 tools/dev/select_harness.py backup settings.bin          # save the settings flash
+python3 tools/dev/select_harness.py long --force                 # 10 s press: factory reset
+python3 tools/dev/select_harness.py restore settings.bin         # put the settings back
 python3 tools/dev/swd.py key g                                   # a keystroke, as if typed on the ST
 python3 tools/dev/swd.py app heap_hold 16                        # hold 16 KB more heap (0 releases)
 python3 tools/dev/swd.py inject 0x0001 0x0067 0                  # any protocol command
@@ -114,13 +119,14 @@ programmed bus samples into an image). Flash through the probe with this tool, n
 own `program`.
 
 `program` and `reset` restart the chip through the watchdog (PSM `WDSEL` + `WATCHDOG_CTRL.TRIGGER`),
-never with OpenOCD's `reset`. A firmware that launches core 1 early (this template's unused
-`select_coreWaitPush()` would) meets OpenOCD's multi-core reset sequence touching core 1 again just
-after that: core 1 died in the middle of its first trace holding the SDK's stdio mutex, and every
-piece of debug output then waited out the 1 s `PICO_STDIO_DEADLOCK_TIMEOUT_MS` (a debug boot of
-220 s instead of 0.7 s, and a dead SELECT button). A watchdog-style reset is the one that leaves
-the chip exactly as a power-on reset does, with DMA and PIO stopped. If an old build shows that symptom, run `swd.py reset` or
-power-cycle. The same applies to a VS Code debug session's restart button.
+never with OpenOCD's `reset`. A firmware that launches core 1 early (as the SELECT watcher this
+template used to ship, `select_coreWaitPush()`, would have) meets OpenOCD's multi-core reset
+sequence touching core 1 again just after that: core 1 died in the middle of its first trace holding
+the SDK's stdio mutex, and every piece of debug output then waited out the 1 s
+`PICO_STDIO_DEADLOCK_TIMEOUT_MS` (a debug boot of 220 s instead of 0.7 s, and a dead SELECT button).
+A watchdog-style reset is the one that leaves the chip exactly as a power-on reset does, with DMA
+and PIO stopped. If an old build shows that symptom, run `swd.py reset` or power-cycle. The same
+applies to a VS Code debug session's restart button.
 
 A halted RP can still be read. Halting core 1 also pauses the RP2040's timer, so after a debugger
 halt run `resume`, which releases both cores; OpenOCD's own `resume` fails in a new OpenOCD run.
@@ -128,8 +134,8 @@ halt run `resume`, which releases both cores; OpenOCD's own `resume` fails in a 
 `select` needs no firmware code: it forces the SELECT pin's input high through the RP2040's GPIO
 input override for 300 ms (`short`) or `SELECT_LONG_RESET` + 1 s (`long`). A long press needs
 `--force`, because in a microfirmware that wires SELECT the usual way it is a factory reset: it
-erases the global settings, and Booster then clears every app's settings. This template does not
-act on SELECT yet, so today a press only changes what the menu prints. `select release` clears an
+erases the global settings, and Booster then clears every app's settings. In this template a short
+press restarts the RP. `select release` clears an
 override left behind. The press is held inside one OpenOCD session, so nothing else can use the
 probe until it ends: to look at the device during a press, put the reads in that same session
 (`mww` the override, `sleep`, `mdw`/`mdb` what you want, `mww` it back).
