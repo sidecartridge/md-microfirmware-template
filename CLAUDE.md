@@ -14,7 +14,7 @@ Top-level build is driven by `build.sh` in the repo root:
 
 ```bash
 # <board_type> = pico | pico_w | sidecartos_16mb
-# <build_type> = debug | release   (note: always compiled as MinSizeRel — see below)
+# <build_type> = release | debug, any case; anything else stops the build (always compiled as MinSizeRel — see below)
 # <app_uuid_key> = UUID4 identifying this app, must match desc/app.json
 ./build.sh pico_w release 123e4567-e89b-12d3-a456-426614174000
 ```
@@ -24,18 +24,21 @@ Required host environment:
 - `atarist-toolkit-docker` (`stcmd`) — needed for the m68k target. It runs `docker run -it`, so it needs a TTY unless `STCMD_NO_TTY=1` is exported (the build scripts set it; see the gotcha below).
 - SDK paths (auto-set from the repo if unset): `PICO_SDK_PATH`, `PICO_EXTRAS_PATH`, `FATFS_SDK_PATH`.
 
-Build flow (orchestrated by `build.sh`):
+Build flow (orchestrated by `build.sh`). Every script stops at the first failing step (`set -Eeo pipefail`) with `ERROR: <script>: failed at line N`, and `build.sh` empties `dist/` before anything else, so a failed build leaves no UF2 or JSON behind:
 1. Copies `version.txt` into `rp/` and `target/atarist/`.
 2. Builds the Atari ST target (`target/atarist/build.sh`) via `stcmd make`. Enforces an **8 KB hard limit** on `BOOT.BIN` (the cartridge code budget — `CHANDLER_CARTRIDGE_CODE_SIZE` in `rp/src/include/chandler.h`, mirrored as `CARTRIDGE_CODE_SIZE` in `target/atarist/src/main.s`); a build that exceeds it aborts with `ERROR: cartridge code is N bytes; limit is 8192`. A separate copy (`FIRMWARE.IMG`) is then padded to 64 KB to fill the entire shared region, and `firmware.py` converts it into `rp/src/include/target_firmware.h` (a C byte array embedded in the RP firmware).
 3. Builds the RP firmware (`rp/build.sh`): pins submodule versions (pico-sdk 2.2.0, pico-extras sdk-2.2.0, fatfs-sdk at a specific commit), runs CMake, produces `rp/dist/rp-<board>.uf2`. The FatFs configuration lives at `rp/src/ff/ffconf.h` and shadows the submodule's default via `target_include_directories(... BEFORE PRIVATE)` in `rp/src/CMakeLists.txt`, so the `fatfs-sdk` submodule stays pristine.
 4. Computes MD5, renames to `dist/<APP_UUID>-<VERSION>.uf2`, and substitutes UUID/MD5/version into `dist/<APP_UUID>.json` from the `desc/app.json` template.
 
 ### Build gotchas
-- **CMake always builds with `-DCMAKE_BUILD_TYPE=MinSizeRel`** regardless of the `<build_type>` argument. A full `Release` previously caused breakage (memory/over-optimization). The legacy line is left commented in `rp/build.sh`. `<build_type>` only controls the `DEBUG_MODE` macro and the dist filename.
+- **CMake always builds with `-DCMAKE_BUILD_TYPE=MinSizeRel`** regardless of the `<build_type>` argument. A full `Release` previously caused breakage (memory/over-optimization). The legacy line is left commented in `rp/build.sh`. `<build_type>` sets `DEBUG_MODE` for both targets (`DPRINTF` and UART stdio on the RP, `_DEBUG` in the m68k assembly) and the dist filename.
+- `RELEASE_DATE="YYYY-MM-DD HH:MM:SS"` fixes the date the images carry (the RP's debug banner, and the cartridge header's GEMDOS date and time), so two builds of one commit are byte-identical. Unset, it is the time of the build.
+- `.vscode/cmake-variants.yaml` gives VS Code's CMake Tools the same two builds (MinSizeRel, `DEBUG_MODE`, the development UUID `44444444-4444-4444-8444-444444444444`). With no `RELEASE_VERSION` in the environment, CMake reads `rp/version.txt`.
+- A stale `.git/modules/<submodule>/index.lock` stops the build at the pin step. Earlier scripts stepped over it and skipped the pin; if no git process is running, delete the lock.
 - `CHARACTER_GAP_MS` must remain defined (700) in `rp/src/include/blink.h` — removing it breaks the RP build.
 - `rp/build.sh` runs `git submodule update --init --recursive` and hard-`checkout`s the pinned revisions on **every** build, and `build.sh` deletes and recreates `dist/` first — any local edit inside a submodule, or anything left in `dist/`, is gone on the next build.
 - Harmless VASM warnings during the m68k build (`target data type overflow`, `trailing garbage after option -D`) can be ignored.
-- VASM/`stcmd` errors like `the input device is not a TTY` mean `stcmd` was invoked without a PTY. `target/atarist/build.sh` already exports `STCMD_NO_TTY=1` for every `stcmd` call it makes; you only need to export it yourself if invoking `stcmd` directly from a non-TTY context (CI, sub-shells, build wrappers). Without it the m68k build can fail silently and the previous `BOOT.BIN` survives — leading to a working RP firmware that displays garbage on the ST because `target_firmware.h` is stale.
+- VASM/`stcmd` errors like `the input device is not a TTY` mean `stcmd` was invoked without a PTY. `target/atarist/build.sh` already exports `STCMD_NO_TTY=1` for every `stcmd` call it makes; you only need to export it yourself if invoking `stcmd` directly from a non-TTY context (CI, sub-shells, build wrappers). Without it `stcmd` fails. The build scripts stop on that; a `stcmd make` run by hand that fails leaves the previous `BOOT.BIN` in place, and an RP build from it displays garbage on the ST because `target_firmware.h` is stale.
 
 ### CI / release
 - `.github/workflows/build.yml` builds `pico_w` Release on PR.
@@ -205,7 +208,7 @@ For an assistant that does not read this file automatically, the same guide publ
 
 - **Never modify** `pico-sdk/`, `pico-extras/`, or `fatfs-sdk/` — they are git submodules pinned to specific upstream revisions, and the build re-pins them on every run. To change FatFs configuration, edit `rp/src/ff/ffconf.h` (project-owned override); the include path is set up so this file wins over the submodule's default.
 - Don't touch `main.c` for feature work — start in `emul.c`.
-- Match the existing C style (clang-format config in `.clang-format`, clang-tidy in `.clang-tidy`). VS Code runs both. The clang-tidy block in `rp/src/CMakeLists.txt` sets `CMAKE_C_CLANG_TIDY` after the target already exists, so it has never run from a command-line build — a clean build is not a clang-tidy pass.
+- Match the existing C style (clang-format config in `.clang-format`, clang-tidy in `.clang-tidy`). VS Code runs both. The command-line build runs neither, so a clean build is not a clang-tidy pass.
 
 ---
 

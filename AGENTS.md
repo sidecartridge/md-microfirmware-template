@@ -67,8 +67,10 @@ A successful build leaves `dist/<UUID>-<version>.uf2` and
 | `arm-none-eabi-gcc not found` | `PICO_TOOLCHAIN_PATH` is unset or not pointing at the toolchain's `bin` dir. |
 | Build stops on missing `CHARACTER_GAP_MS` | Re-add `#define CHARACTER_GAP_MS 700` to `rp/src/include/blink.h`. |
 | `ERROR: cartridge code is N bytes; limit is 8192` | The m68k image outgrew its 8 KB budget. Trim `main.s`/`userfw.s` or move data out of the cartridge image into `APP_FREE` / the shared variables. |
-| Final steps fail copying the UF2 | An upstream compile failed — scroll back to the first error, not the copy step. |
-| The ST shows garbage but terminal commands still work | `target_firmware.h` is stale: `stcmd make` failed silently and the previous `BOOT.BIN` survived, so the m68k is running against the wrong shared-region addresses. Compare the timestamp of `target/atarist/dist/BOOT.BIN` against the rest of `dist/`. |
+| `ERROR: <script>: failed at line N` | The step on that line failed; the real error is printed just above it. Every build script stops at the first failure, and `dist/` is left empty. |
+| `ERROR: unknown build type` | The second argument must be `release` or `debug` (any case). |
+| `Unable to create '.../.git/modules/<submodule>/index.lock': File exists` | A git process died in that submodule earlier. If none is running, delete the lock and build again. |
+| The ST shows garbage but terminal commands still work | `target_firmware.h` is stale: a `stcmd make` run by hand failed and the previous `BOOT.BIN` survived (the build scripts stop on that failure), so the m68k is running against the wrong shared-region addresses. Compare the timestamp of `target/atarist/dist/BOOT.BIN` against the rest of `dist/`. |
 | Commands from the ST are dropped or arrive late | Some loop is blocking without draining the ROM3 ring. Every blocking wait needs `chandler_loop()` — see CLAUDE.md > Command path. |
 | A `release` build prints nothing on serial | Expected: `DPRINTF` and UART stdio are compiled out unless the build type is `debug`. |
 | Local changes inside `pico-sdk/`, `pico-extras/` or `fatfs-sdk/` vanished | `rp/build.sh` re-checks-out the pinned revisions on every build. Never edit the submodules; FatFs config belongs in `rp/src/ff/ffconf.h`. |

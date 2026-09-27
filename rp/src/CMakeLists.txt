@@ -84,8 +84,6 @@ set(CMAKE_C_STANDARD 11)
 # Creates a pico-sdk subdirectory in our project for the libraries
 pico_sdk_init()
 
-add_subdirectory(settings)
-
 # Add u8g2 library
 add_subdirectory(u8g2)
 
@@ -134,7 +132,6 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     pico_stdlib              # Core functionality
     pico_multicore          # Multicore support
     httpc                    # HTTP client
-    settings                 # Custom settings library
     u8g2                     # for display
 )
 
@@ -161,10 +158,12 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 target_include_directories(${PROJECT_NAME} BEFORE PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/ff)
 
-# Needed to include lwipopts.h properly
+# Needed to include lwipopts.h properly. settings/ holds settings.h;
+# settings.c is compiled directly into the target (add_executable above).
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/include
+    ${CMAKE_CURRENT_LIST_DIR}/settings
     ${CMAKE_CURRENT_LIST_DIR}/..)
 
 
@@ -191,7 +190,14 @@ if(NOT RELEASE_VERSION)
     else()
         set(VERSION_FILE_NAME "version-${RELEASE_TYPE}.txt")
     endif()
-    
+
+    # rp/<file>, as rp/build.sh reads it; a build that does not go through
+    # the scripts (VS Code) gets the same version.
+    set(VERSION_FILE_PATH "${CMAKE_CURRENT_LIST_DIR}/../${VERSION_FILE_NAME}")
+    if(EXISTS "${VERSION_FILE_PATH}")
+        file(READ "${VERSION_FILE_PATH}" RELEASE_VERSION)
+    endif()
+
     # Remove newline character if present
     string(STRIP "${RELEASE_VERSION}" RELEASE_VERSION)
 
@@ -265,10 +271,13 @@ add_definitions(-DAPP_DOWNLOAD_HTTPS=0)
 # the git commit) are regenerated on every build; see build_id.cmake. They are
 # rewritten only when the ID changes, so only their users recompile. The symbol
 # is kept through --gc-sections so tools/dev/swd.py can read it over SWD.
+# A debug build's ID ends in +debug, so a debug and a release build of one
+# tree cannot be taken for each other on the device.
 set(BUILD_ID_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated/build_id)
 add_custom_target(build_id
     COMMAND ${CMAKE_COMMAND} -DSRC_DIR=${CMAKE_CURRENT_LIST_DIR}
-            -DOUT_DIR=${BUILD_ID_DIR} -P ${CMAKE_CURRENT_LIST_DIR}/build_id.cmake
+            -DOUT_DIR=${BUILD_ID_DIR} -DDEBUG_BUILD=${_DEBUG}
+            -P ${CMAKE_CURRENT_LIST_DIR}/build_id.cmake
     BYPRODUCTS ${BUILD_ID_DIR}/build_id.h ${BUILD_ID_DIR}/build_id.c
     COMMENT "Checking the build ID")
 add_dependencies(${PROJECT_NAME} build_id)
@@ -281,16 +290,6 @@ target_link_options(${PROJECT_NAME} PRIVATE "-Wl,--undefined=release_build_id")
 # .uf2 (byte-identical either way), and tools/dev/swd.py finds the cartridge
 # window, the build ID and its other addresses by symbol.
 target_link_options(${PROJECT_NAME} PRIVATE "-Wl,--gc-sections")
-
-# Enable clang-tidy (you need to have clang-tidy installed on your system)
-find_program(CLANG_TIDY_EXE NAMES clang-tidy)
-
-if(CLANG_TIDY_EXE)
-    set(CMAKE_C_CLANG_TIDY "${CLANG_TIDY_EXE}")
-    message(STATUS "Found clang-tidy: ${CLANG_TIDY_EXE}")
-else()
-    message(WARNING "clang-tidy not found, skipping linting")
-endif()
 
 # Find clang-format executable
 find_program(CLANG_FORMAT_BIN NAMES clang-format)

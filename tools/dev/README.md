@@ -59,7 +59,8 @@ image is not rebuilt: after changing `target/atarist`, run `target/atarist/build
 regenerates `rp/src/include/target_firmware.h`), then `flash.sh`.
 
 Every build carries a build ID: the git commit, `<sha7>`, or `<sha7>-dirty.<diff7>` when the tree
-has uncommitted changes. The same tree always gives the same ID, and at the same checkout path a
+has uncommitted changes, followed by `+debug` in a debug build, so a debug and a release build of one
+tree never share an ID. The same tree always gives the same ID, and at the same checkout path a
 byte-identical binary (release builds embed source paths, so another path gives other bytes). The
 ID is stored in flash as the `release_build_id` string, and `rp.elf` is kept as
 `tools/dev/builds/elf/<type>-<id>.elf` for resolving crash addresses later.
