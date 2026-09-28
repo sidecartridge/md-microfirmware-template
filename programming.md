@@ -609,9 +609,11 @@ The cartridge ROM3 region is no longer a data bank. It is reserved for the comma
 
 `commemul_init()` brings up:
 - A dedicated PIO state machine on `ROM3_GPIO` that waits on the ROM3 chip-select and pushes the 16-bit address onto the RX FIFO.
-- A single DMA channel running in **ring mode** (`channel_config_set_ring`) that drains the FIFO into a 32 KB / 16 384-word ring buffer perpetually (`COMM_DMA_TRANSFER_COUNT = 0xFFFFFFFF`).
+- A single DMA channel running in **ring mode** (`channel_config_set_ring`) that drains the FIFO into a 16 KB / 8,192-sample ring buffer. The size holds about two of the largest sends the ST can make, retries included; the arithmetic is next to `COMM_RING_BITS` in `commemul.c`.
 
-There are no IRQs anywhere in this path. The application drains the ring by calling `commemul_poll(callback)`, which derives the producer index from `dma_hw->ch[ch].transfer_count` and invokes the callback for every new sample.
+There are no IRQs anywhere in this path. The application drains the ring by calling `commemul_poll(callback)`, which derives the producer index from `dma_hw->ch[ch].transfer_count` and invokes the callback for every new sample. If the application stops draining for long enough that a whole ring arrives, the lap is counted (`commemul_getOverruns()`) and the unread samples are dropped rather than parsed as a mix of old and new ones; the parser then resynchronises on the next header. The channel is re-armed from its live write address long before its transfer count runs out, so capture never stops.
+
+`chandler.c` keeps counters of the handshake as plain globals: commands answered, dropped while one was pending, repeated with the previous token (the ST retrying), checksum errors, and the time spent busy, waiting for the ST, and draining. `tools/dev/swd.py counters` reads them from a running release or debug build.
 
 ##### chandler.c (command dispatcher)
 

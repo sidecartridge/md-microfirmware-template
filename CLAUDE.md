@@ -65,7 +65,8 @@ repeatable (its `README.md` has the full command list):
   ELF, that its flash matches byte for byte, and that it carries the expected build ID.
 - `swd.py` reads a *running* RP over SWD: `screen` renders the framebuffer as the ST sees it
   (a PNG), `text` prints the terminal buffer, `shared` dumps the sentinel/token/shared variables,
-  `heap` reads newlib's allocator, `crash` explains the last reboot and `postmortem` halts for
+  `counters` reads the command channel's counters (commands answered, dropped, repeated, checksum
+  errors, ring overruns, busy/gap/quiet time) without halting, `heap` reads newlib's allocator, `crash` explains the last reboot and `postmortem` halts for
   backtraces. On debug builds `key`, `inject` and `app` drive the firmware through the devhooks
   mailbox (`rp/src/include/devhooks.h`): `swd.py key h` then `swd.py key $'\n'` runs the `h`
   menu command, `swd.py app heap_hold 16` holds 16 KB of heap. They rely on the ELF keeping its
@@ -123,7 +124,7 @@ See `programming.md` for the full table and budget rules.
 - `main.c` — only sets clock/voltage, calls `gconfig_init` (global config) then `aconfig_init` (per-app config), and hands off to `emul_start()`. If config init fails it jumps to the **Booster** app via `reset_jump_to_booster()` to bootstrap. **Don't add features to `main.c`** — put them in `emul.c` or a new module.
 - `emul.c` / `emul.h` — the application's main loop and entry point. This is where to add new features. `emul_start()` runs the fixed bring-up order: copy `target_firmware` into `ROM_IN_RAM` → `init_romemul(false)` → `commemul_init()` → `chandler_init()` + `chandler_addCB(...)` → display → SD → network → `init()` → main loop. The RP-side terminal UI is a `commands[]` table (`{"f", cmdFirmware}`, …) handed to `term_setCommands()`; add a menu command by adding a row plus its handler.
 - `romemul.c` / `romemul.pio` — ROM4 **read** engine: a PIO SM latches the 16-bit address, and a chained DMA pair reads that offset out of `ROM_IN_RAM` and pushes it to the PIO TX FIFO. Fully DMA-driven, no IRQ, no CPU. Driven by the `READ_*` / `WRITE_*` GPIOs in `include/constants.h`. Changing these files produces very strange bugs.
-- `commemul.c` / `commemul.pio` — ROM3 **command** capture: a PIO SM on `ROM3_GPIO` plus one ring-mode DMA channel continuously records every ROM3 access into a 16 384-word ring. Drained by polling (`commemul_poll`), never by IRQ.
+- `commemul.c` / `commemul.pio` — ROM3 **command** capture: a PIO SM on `ROM3_GPIO` plus one ring-mode DMA channel continuously records every ROM3 access into an 8,192-sample (16 KB) ring, sized in `commemul.c` from the largest frame the ST can send with its retries. Drained by polling (`commemul_poll`), never by IRQ. A reader that falls a whole ring behind is counted in `commOverruns` and the unread samples dropped; the DMA is re-armed long before its transfer count runs out.
 - `chandler.c` / `include/chandler.h` — the polled command dispatcher on top of `commemul` + `tprotocol`, and the RP-side source of truth for the shared-region offsets (`CHANDLER_*`).
 - `gconfig.c` / `aconfig.c` — global vs per-app configuration stored in dedicated flash sectors, on top of `settings/` (a key-value store).
 - `network.c`, `httpc/`, `download.c` — Wi-Fi (CYW43, lwIP poll mode), HTTPS-capable HTTP client, firmware download support.
