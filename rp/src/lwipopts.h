@@ -77,9 +77,7 @@
 #define LWIP_NETIF_LINK_CALLBACK 1
 #define LWIP_NETIF_HOSTNAME 1
 #define LWIP_NETCONN 0
-#define MEM_STATS 0
 #define SYS_STATS 0
-#define MEMP_STATS 0
 #define LINK_STATS 0
 // #define ETH_PAD_SIZE                2
 #define LWIP_CHKSUM_ALGORITHM 3
@@ -98,6 +96,21 @@
 #define LWIP_DEBUG 1
 #define LWIP_STATS 1
 #define LWIP_STATS_DISPLAY 1
+#endif
+
+// lwIP counts its failed allocations in debug builds only: a failed one is
+// otherwise silent (a tcp_write that sends nothing, a connection that times
+// out). devdownload.c reports the count and tools/dev/download_harness.py
+// checks it after every download.
+#if defined(_DEBUG) && (_DEBUG != 0)
+#ifndef LWIP_STATS
+#define LWIP_STATS 1
+#endif
+#define MEM_STATS 1
+#define MEMP_STATS 1
+#else
+#define MEM_STATS 0
+#define MEMP_STATS 0
 #endif
 
 #define ETHARP_DEBUG LWIP_DBG_OFF

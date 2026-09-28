@@ -139,7 +139,7 @@ See `programming.md` for the full table and budget rules.
 - `commemul.c` / `commemul.pio` — ROM3 **command** capture: a PIO SM on `ROM3_GPIO` plus one ring-mode DMA channel continuously records every ROM3 access into an 8,192-sample (16 KB) ring, sized in `commemul.c` from the largest frame the ST can send with its retries. Drained by polling (`commemul_poll`), never by IRQ. A reader that falls a whole ring behind is counted in `commOverruns` and the unread samples dropped; the DMA is re-armed long before its transfer count runs out.
 - `chandler.c` / `include/chandler.h` — the polled command dispatcher on top of `commemul` + `tprotocol`, and the RP-side source of truth for the shared-region offsets (`CHANDLER_*`).
 - `gconfig.c` / `aconfig.c` — global vs per-app configuration stored in dedicated flash sectors, on top of `settings/` (a key-value store).
-- `network.c`, `httpc/`, `download.c` — Wi-Fi (CYW43, lwIP poll mode), lwIP's HTTP client, and downloads to the SD card: over http:// in every build, over https:// with `APP_DOWNLOAD_HTTPS=1` (encrypted, but the server's certificate is not verified: there is no CA bundle and no wall clock). `download_poll()` never waits, follows up to 5 redirects and retries a failed hop twice; only a 2xx response reaches the file, and any failure deletes the temporary file and says why (`download_getError()`, `download_getHttpStatus()`).
+- `network.c`, `httpc/`, `download.c` — Wi-Fi (CYW43, lwIP poll mode), lwIP's HTTP client, and downloads to the SD card: over http:// in every build, over https:// with `APP_DOWNLOAD_HTTPS=1` (encrypted, but the server's certificate is not verified: there is no CA bundle and no wall clock). `download_poll()` never waits, follows up to 5 redirects and retries a failed hop twice; only a 2xx response reaches the file, and any failure deletes the temporary file and says why (`download_getError()`, `download_getHttpStatus()`). Nothing in the template calls it: debug builds drive it over SWD with `tools/dev/download_harness.py` (`devdownload.c`).
 - `sdcard.c`, `hw_config.c` — FatFs over SPI/SDIO via the bundled `fatfs-sdk`.
 - `display.c`, `display_term.c`, `term.c`, `u8g2/` — terminal-style display rendered into the Atari framebuffer at `$FAE0C0` and/or a local OLED.
 - `blink.c`, `select.c`, `reset.c`, `tprotocol.c` — LED Morse status, the SELECT button, soft reset/jump-to-booster, command-protocol parser and `TPROTO_*` payload accessors.
@@ -214,6 +214,25 @@ its commands and an ST reboot reach 1,696 bytes, and the boot with the Wi-Fi con
 v1.2.1 the terminal copied a 4 KB protocol slot onto the stack, the same run reached 7,360 bytes,
 through core 1's stack, and stopped 832 bytes short of the cartridge window. Keep large buffers off
 the stack: `tools/dev/stackdepth.py` on a `tools/dev/measure_builds.sh` build lists every frame.
+
+The download profile (`APP_DOWNLOAD_HTTPS`) changes the budget. Measured with
+`tools/dev/download_harness.py`'s downloads, redirect chains and RSA-2048 and ECDSA handshakes
+included:
+
+- **HTTP (the default):** the numbers above. A release build is the same size as before the
+  switch existed: flash 456,940 bytes, static RAM 68,944, heap 115,720. Downloads took core 0's
+  stack to 1,892 bytes and lwIP's pools to 5 of 12 pbufs and 4 of 16 segments, with no failed
+  allocation.
+- **HTTPS:** the larger lwIP window and pools cost every build about 31 KB of static RAM (release:
+  static RAM 100,648, heap 84,016). An app that downloads also gets mbedTLS, about 120 KB of
+  flash (debug build: 515,776 → 637,488 bytes; the template itself calls no download, so its
+  release image leaves it out), and TLS sessions on the heap, about 40 KB at the peak. A TLS
+  handshake took core 0's stack to 3,168 bytes (Cloudflare's elliptic-curve one; 2,000-2,400 for
+  RSA servers), too close to 4 KB, so an HTTPS build gives core 0 `SCRATCH_X` as well: 8 KB, the
+  guard at its bottom (`__core0_stack_takes_scratch_x` in `memmap_rp.ld`). The debug build's heap,
+  61.1 KB, peaked at 49.1 KB (9.3 KB at rest). lwIP's pbuf pool peaked at 25 of 32, with no
+  failed allocation; with 24, a 1 MB HTTPS download ran it out twice, because the TLS layer
+  decrypts into pool pbufs and `download.c` holds the body until the card has taken it.
 
 The build assumes Core 0 owns flash writes (`PICO_FLASH_ASSUME_CORE0_SAFE=1`). The PIO bus emulation runs hot — Core 0 also overclocks to 225 MHz at `VREG_VOLTAGE_1_10`.
 

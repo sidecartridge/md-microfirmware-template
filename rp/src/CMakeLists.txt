@@ -123,6 +123,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         blink.c
         chandler.c
         commemul.c
+        devdownload.c
         display.c
         display_term.c
         download.c
@@ -137,6 +138,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         select.c
         term.c
         tprotocol.c
+        md5/md5.c
         settings/settings.c)
 
 # Create map/bin/hex/uf2 files
