@@ -25,6 +25,39 @@ static bool sharedVarSetPending = false;
 
 static uint32_t incrementalCmdCount = 0;
 
+// Counters of the ST's synchronous handshake, plain globals so that
+// tools/dev/swd.py can read them by symbol on a release build too:
+//   chandlerHandled         commands answered
+//   chandlerDropped         commands thrown away because one was pending
+//   chandlerRepeated        commands with the previous one's token: the ST
+//                           resending after its timeout
+//   chandlerChecksumErrors  frames that failed their checksum
+//   chandlerBusyUs          time from seeing a command to answering it
+//   chandlerGapUs           time from answering one command to seeing the
+//                           next: the ST's turnaround
+//   chandlerQuietUs         of that gap, the time until the ST's next sample
+//                           arrives at all
+//   chandlerFramePolls      main-loop passes a frame spans, first sample to
+//                           last: a slow sender against slow draining
+//   chandlerPollUs          time spent draining the capture ring
+// with the largest single busy, gap and quiet times alongside.
+uint32_t chandlerHandled = 0;
+uint32_t chandlerDropped = 0;
+uint32_t chandlerRepeated = 0;
+uint32_t chandlerChecksumErrors = 0;
+uint32_t chandlerBusyUs = 0;
+uint32_t chandlerMaxBusyUs = 0;
+uint32_t chandlerGapUs = 0;
+uint32_t chandlerMaxGapUs = 0;
+uint32_t chandlerQuietUs = 0;
+uint32_t chandlerMaxQuietUs = 0;
+uint32_t chandlerFramePolls = 0;
+uint32_t chandlerPollUs = 0;
+static bool chandlerFrameInFlight = false;
+static bool chandlerAwaitingFirstSample = false;
+static uint32_t chandlerLastToken = 0;
+static uint32_t chandlerAnsweredAtUs = 0;
+
 // Address of the random-token reply slot (chandler_loop publishes the
 // 64-bit { incrementalCmdCount | randomToken } value here so the m68k's
 // send_sync poll wakes up).
@@ -126,6 +159,7 @@ static inline void __not_in_flash_func(handle_protocol_command)(
   uint16_t size = tprotocol_clamp_payload_size(protocol->payload_size);
 
   if (protocolPending) {
+    chandlerDropped++;
     if (!chandler_protocol_matches_pending(protocol, size)) {
       DPRINTF("Ignoring protocol %04x (%u bytes) while %04x is pending\n",
               protocol->command_id, protocol->payload_size,
@@ -175,6 +209,7 @@ bool chandler_injectProtocol(uint16_t commandId, const uint16_t *payload,
 
 static inline void __not_in_flash_func(handle_protocol_checksum_error)(
     const TransmissionProtocol *protocol) {
+  chandlerChecksumErrors++;
   DPRINTF(
       "Checksum error detected (CommandID=%x, Size=%x, Bytes Read=%x, "
       "Chksum=%x, RTOKEN=%x)\n",
@@ -184,6 +219,13 @@ static inline void __not_in_flash_func(handle_protocol_checksum_error)(
 
 static inline void __not_in_flash_func(chandler_consume_rom3_sample)(
     uint16_t sample) {
+  if (chandlerAwaitingFirstSample) {
+    chandlerAwaitingFirstSample = false;
+    chandlerFrameInFlight = true;
+    uint32_t quiet = time_us_32() - chandlerAnsweredAtUs;
+    chandlerQuietUs += quiet;
+    if (quiet > chandlerMaxQuietUs) chandlerMaxQuietUs = quiet;
+  }
   uint16_t addr_lsb = (uint16_t)(sample ^ CHANDLER_ADDRESS_HIGH_BIT);
 
   tprotocol_parse(addr_lsb, handle_protocol_command,
@@ -193,12 +235,19 @@ static inline void __not_in_flash_func(chandler_consume_rom3_sample)(
 // Invoke this function to process the commands from the active loop in the
 // main function
 void __not_in_flash_func(chandler_loop)() {
+  uint32_t pollStartUs = time_us_32();
+  bool frameWasInFlight = chandlerFrameInFlight;
   commemul_poll(chandler_consume_rom3_sample);
+  chandlerPollUs += time_us_32() - pollStartUs;
+  if (frameWasInFlight || chandlerFrameInFlight) {
+    chandlerFramePolls++;
+  }
 
   if (!protocolPending) {
     // No command to process
     return;
   }
+  uint32_t startedAtUs = time_us_32();
 
   // Shared by all commands
   // Read the random token from the command and increment the payload
@@ -253,6 +302,25 @@ void __not_in_flash_func(chandler_loop)() {
   TPROTO_SET_RANDOM_TOKEN64(
       memoryRandomTokenAddress,
       (((uint64_t)incrementalCmdCount) << 32) | randomToken);
+
+  // The counters, after the answer.
+  uint32_t answeredAtUs = time_us_32();
+  uint32_t busy = answeredAtUs - startedAtUs;
+  chandlerBusyUs += busy;
+  if (busy > chandlerMaxBusyUs) chandlerMaxBusyUs = busy;
+  if (chandlerAnsweredAtUs != 0) {
+    uint32_t gap = startedAtUs - chandlerAnsweredAtUs;
+    chandlerGapUs += gap;
+    if (gap > chandlerMaxGapUs) chandlerMaxGapUs = gap;
+  }
+  chandlerAnsweredAtUs = answeredAtUs;
+  chandlerAwaitingFirstSample = true;
+  chandlerFrameInFlight = false;
+  chandlerHandled++;
+  if (randomToken == chandlerLastToken) {
+    chandlerRepeated++;
+  }
+  chandlerLastToken = randomToken;
 
   chandler_clear_pending_protocol();
 }

@@ -122,8 +122,15 @@ WATCHDOG_SCRATCH0 = 0x4005800C
 GDB_PORT = 3333
 # Variables postmortem prints when the ELF has them (emul.c, chandler.c,
 # commemul.c); a build without one simply lacks it. Add the app's own here.
+# The command channel's counters (chandler.c, commemul.c), plain globals that
+# `counters` reads without halting and `postmortem` prints.
+COUNTERS = ("chandlerHandled", "chandlerDropped", "chandlerRepeated",
+            "chandlerChecksumErrors", "commOverruns", "chandlerBusyUs",
+            "chandlerMaxBusyUs", "chandlerGapUs", "chandlerMaxGapUs",
+            "chandlerQuietUs", "chandlerMaxQuietUs", "chandlerFramePolls",
+            "chandlerPollUs")
 POSTMORTEM_VARIABLES = ("keepActive", "menuScreenActive", "protocolPending",
-                        "incrementalCmdCount", "commReadIdx")
+                        "incrementalCmdCount", "commReadIdx") + COUNTERS
 BUILD_ID_SYMBOL = "release_build_id"
 # The shared variables are one block of CHANDLER_SHARED_VARIABLES_SLOTS indexed
 # 4-byte slots (chandler.h); an index past it is not a shared variable.
@@ -578,6 +585,31 @@ def heap_line(snap: dict) -> str:
     return line
 
 
+def cmd_counters(args: argparse.Namespace) -> int:
+    """The command channel's counters, read while the RP runs."""
+    elf = matching_elf(args.elf)
+    sym = elf_symbols(elf, *COUNTERS)
+    missing = [n for n in COUNTERS if n not in sym]
+    if missing:
+        raise SwdError(f"{os.path.basename(elf)} lacks {', '.join(missing)}")
+    first, last = min(sym[n][0] for n in COUNTERS), max(sym[n][0] for n in COUNTERS)
+    data = read_memory(first, last - first + 4)
+    v = {n: struct.unpack_from("<I", data, sym[n][0] - first)[0] for n in COUNTERS}
+    n = v["chandlerHandled"]
+    avg = lambda key: f"{v[key] / n:.0f}" if n else "-"
+    print(f"commands answered {n}, dropped while one was pending "
+          f"{v['chandlerDropped']}, repeated tokens {v['chandlerRepeated']}, "
+          f"checksum errors {v['chandlerChecksumErrors']}, ring overruns "
+          f"{v['commOverruns']}")
+    print(f"per command: busy {avg('chandlerBusyUs')} us (max "
+          f"{v['chandlerMaxBusyUs']}), gap to the next {avg('chandlerGapUs')} us "
+          f"(max {v['chandlerMaxGapUs']}), of which quiet {avg('chandlerQuietUs')} us "
+          f"(max {v['chandlerMaxQuietUs']}); passes per frame "
+          f"{v['chandlerFramePolls'] / n:.2f}" if n else "per command: -")
+    print(f"ring drained for {v['chandlerPollUs'] / 1e6:.3f} s in all")
+    return 0
+
+
 def cmd_heap(args: argparse.Namespace) -> int:
     elf = matching_elf(args.elf)
     csv = None
@@ -952,6 +984,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     rst = sub.add_parser("reset", help="reset the whole chip, watchdog-style")
     rst.set_defaults(func=cmd_reset)
+
+    cn = sub.add_parser("counters", help="the command channel's counters, "
+                        "without halting")
+    cn.add_argument("--elf")
+    cn.set_defaults(func=cmd_counters)
 
     hp = sub.add_parser("heap", help="heap size, peak and free space")
     hp.add_argument("--elf")

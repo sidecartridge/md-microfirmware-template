@@ -99,6 +99,7 @@ python3 tools/dev/swd.py inject 0x0001 0x0067 0                  # any protocol 
 python3 tools/dev/swd.py crash                                   # why did it last reboot?
 python3 tools/dev/swd.py postmortem                              # halt, backtraces, resume
 python3 tools/dev/swd.py heap                                    # heap size, peak, free space
+python3 tools/dev/swd.py counters                                # command channel counters, no halt
 python3 tools/dev/swd.py heap --watch 5 --csv tools/dev/logs/heap.csv   # sample during a test
 ```
 
