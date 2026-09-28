@@ -1113,7 +1113,10 @@ void term_cmdUnknown(const char *arg) {
 }
 
 void term_cmdSave(const char *arg) {
-  settings_save(aconfig_getContext(), true);
+  if (settings_save(aconfig_getContext(), true) < 0) {
+    term_printString("Error: settings not saved.\n");
+    return;
+  }
   term_printString("Settings saved.\n");
 }
 
