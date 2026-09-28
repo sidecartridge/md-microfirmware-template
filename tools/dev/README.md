@@ -53,8 +53,8 @@ tools/dev/flash.sh debug --src /tmp/src   # build a copy of rp/src (for example 
 
 Builds out of tree in `tools/dev/builds/<type>`, incrementally. It does not touch `rp/build` or
 the submodules, and warns when a submodule is not at the version `rp/build.sh` pins. It builds
-with the same CMake build type as `rp/build.sh` (MinSizeRel today; `RP_CMAKE_BUILD_TYPE`
-overrides it). The m68k
+with the same CMake build type as `rp/build.sh` (Release; `RP_CMAKE_BUILD_TYPE` overrides it,
+with a warning, in a folder of its own). The m68k
 image is not rebuilt: after changing `target/atarist`, run `target/atarist/build.sh` first (it
 regenerates `rp/src/include/target_firmware.h`), then `flash.sh`.
 

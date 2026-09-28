@@ -14,7 +14,7 @@ Top-level build is driven by `build.sh` in the repo root:
 
 ```bash
 # <board_type> = pico | pico_w | sidecartos_16mb
-# <build_type> = release | debug, any case; anything else stops the build (always compiled as MinSizeRel — see below)
+# <build_type> = release | debug, any case; anything else stops the build (both CMake Release — see below)
 # <app_uuid_key> = UUID4 identifying this app, must match desc/app.json
 ./build.sh pico_w release 123e4567-e89b-12d3-a456-426614174000
 # The same, with HTTPS downloads built in (the default builds HTTP only):
@@ -33,10 +33,10 @@ Build flow (orchestrated by `build.sh`). Every script stops at the first failing
 4. Computes MD5, renames to `dist/<APP_UUID>-<VERSION>.uf2`, and substitutes UUID/MD5/version into `dist/<APP_UUID>.json` from the `desc/app.json` template.
 
 ### Build gotchas
-- **CMake always builds with `-DCMAKE_BUILD_TYPE=MinSizeRel`** regardless of the `<build_type>` argument. A full `Release` previously caused breakage (memory/over-optimization). The legacy line is left commented in `rp/build.sh`. `<build_type>` sets `DEBUG_MODE` for both targets (`DPRINTF` and UART stdio on the RP, `_DEBUG` in the m68k assembly) and the dist filename.
+- **Both build types are CMake `Release` (-O3).** `<build_type>` sets only `DEBUG_MODE` for both targets (`DPRINTF`, UART stdio and the SWD hooks on the RP, `_DEBUG` in the m68k assembly) and the dist filename, so a debug build runs the same optimised code as a release build and every harness tests what ships. Up to v1.2.x every build was `MinSizeRel`, because a `Release` build once broke at runtime with no reproducer recorded; Release with `DEBUG_MODE=1` did not even assemble until `tprotocol.h`'s inline `strh` took low registers only (`"l"`: Thumb-1's `strh` cannot use `ip`). `RP_CMAKE_BUILD_TYPE` overrides the CMake type in `rp/build.sh` and `tools/dev/flash.sh`, with a warning: `MinSizeRel` to compare against the old builds, `Debug` (-Og, and asserts and lwIP's debug checks on, since it lacks `-DNDEBUG`) to step through the code in a debugger. Such a build's ID carries its type (`+minsizerel`, `+cmakedebug`). Release costs about 48 KB more flash than MinSizeRel and 24 bytes of heap. An HTTPS build compiles mbedTLS itself `-Os` whatever the type: at -O3 every TLS handshake failed, bisected on the device to `library/gcm.c`.
 - **`APP_DOWNLOAD_HTTPS` picks the download profile** (`rp/src/CMakeLists.txt`). Unset or `0`, the default: HTTP only, no mbedTLS linked, and lwIP keeps its HTTP sizes; an `https://` URL fails with `DOWNLOAD_HTTPSNOTBUILT_ERROR` instead of being fetched over plain HTTP. `1`: HTTP and HTTPS, chosen per URL, with mbedTLS, lwIP's ALTCP-over-TLS layer and the larger lwIP window and pbuf pool a 16 KB TLS record needs. The C code, `lwipopts.h`, the URL buffers in `download.h` and the build ID (`+https`) all follow it; `httpc.c` is compiled into the firmware target (not a library of its own) so it cannot see another value, and a source built without it stops with an `#error`. `tools/dev/flash.sh` reads it too and builds into `tools/dev/builds/<type>-https`. VS Code builds HTTP only unless its environment sets it.
 - `RELEASE_DATE="YYYY-MM-DD HH:MM:SS"` fixes the date the images carry (the RP's debug banner, and the cartridge header's GEMDOS date and time), so two builds of one commit are byte-identical. Unset, it is the time of the build.
-- `.vscode/cmake-variants.yaml` gives VS Code's CMake Tools the same two builds (MinSizeRel, `DEBUG_MODE`, the development UUID `44444444-4444-4444-8444-444444444444`). With no `RELEASE_VERSION` in the environment, CMake reads `rp/version.txt`.
+- `.vscode/cmake-variants.yaml` gives VS Code's CMake Tools the same two builds (CMake Release, `DEBUG_MODE`, the development UUID `44444444-4444-4444-8444-444444444444`). With no `RELEASE_VERSION` in the environment, CMake reads `rp/version.txt`.
 - A stale `.git/modules/<submodule>/index.lock` stops the build at the pin step. Earlier scripts stepped over it and skipped the pin; if no git process is running, delete the lock.
 - `CHARACTER_GAP_MS` must remain defined (700) in `rp/src/include/blink.h` — removing it breaks the RP build.
 - `rp/build.sh` runs `git submodule update --init --recursive` and hard-`checkout`s the pinned revisions on **every** build, and `build.sh` deletes and recreates `dist/` first — any local edit inside a submodule, or anything left in `dist/`, is gone on the next build.
@@ -114,7 +114,7 @@ The firmware is a **two-target build**: m68k assembly that runs on the Atari ST 
 
 ### Atari ST side (`target/atarist/`)
 - `src/main.s` — m68k cartridge boot + dispatch + terminal. Lives at `$FA0000` in the ST address space (ROM4 cartridge region). Defines the cartridge header (`CA_MAGIC`, `CA_INIT`, …), command magic numbers, and the shared-variable layout used to talk to the RP2040.
-- `src/userfw.s` — **the primary extension point for app-specific m68k code.** `src/userfw.ld` places `main.s` at offset `0x0000` (2 KB budget) and `userfw.s` at offset `0x0800` (6 KB budget); `main.s` exposes the latter as `USERFW equ (ROM4_ADDR + $800)`. When the RP-side terminal command `f` ([F]irmware) is selected, the RP writes `CMD_START = 4` to the cartridge sentinel; the m68k's vsync-polled `check_commands` dispatches to `rom_function`, which `jmp`s to `USERFW`. The default `userfw.s` is a Cconws demo that returns to TOS — replace its body with your own logic. It includes `inc/sidecart_layout.s` (the window and the command channel, shared with `main.s`), the macros and, at its end, the senders followed by the NOP tail. Its code must be PC-relative: it is linked at offset `$0800`, not at `$FA0800`.
+- `src/userfw.s` — **the primary extension point for app-specific m68k code.** `src/userfw.ld` places `main.s` at offset `0x0000` (2 KB budget) and `userfw.s` at offset `0x0800` (6 KB budget); `main.s` exposes the latter as `USERFW equ (ROM4_ADDR + $800)`. When the RP-side terminal command `f` ([F]irmware) is selected, the RP writes `CMD_START = 4` to the cartridge sentinel; the m68k's vsync-polled `check_commands` dispatches to `rom_function`, which `jmp`s to `USERFW`. The default `userfw.s` is a Cconws demo that returns to TOS — replace its body with your own logic. The sentinel keeps `CMD_START`, so every later ST boot runs the user firmware again, as an app's emulation mode would; a short SELECT press restarts the RP into the setup menu (and clears the window), and the next ST reset shows the menu. It includes `inc/sidecart_layout.s` (the window and the command channel, shared with `main.s`), the macros and, at its end, the senders followed by the NOP tail. Its code must be PC-relative: it is linked at offset `$0800`, not at `$FA0800`.
 - Adding more m68k modules: add a new `.text_<name>` section in `userfw.ld`, mirror the offset with an `equ (ROM4_ADDR + $????)` in `inc/sidecart_layout.s`, and add the `.o` target to `target/atarist/Makefile` (same pattern as `gemdrive.ld` in `md-drives-emulator`).
 - Built via `stcmd make release` (m68k assembler in Docker); the cartridge image (header + all `.text_*` sections) must fit in 8 KB. A 64 KB padded copy is then converted to `target_firmware.h` for inclusion in the RP build.
 
@@ -219,18 +219,18 @@ The download profile (`APP_DOWNLOAD_HTTPS`) changes the budget. Measured with
 `tools/dev/download_harness.py`'s downloads, redirect chains and RSA-2048 and ECDSA handshakes
 included:
 
-- **HTTP (the default):** the numbers above. A release build is the same size as before the
-  switch existed: flash 456,940 bytes, static RAM 68,944, heap 115,720. Downloads took core 0's
+- **HTTP (the default):** the numbers above. A release build: flash 505,284 bytes, static RAM
+  68,968, heap 115,696. Downloads took core 0's
   stack to 1,892 bytes and lwIP's pools to 5 of 12 pbufs and 4 of 16 segments, with no failed
   allocation.
 - **HTTPS:** the larger lwIP window and pools cost every build about 31 KB of static RAM (release:
-  static RAM 100,648, heap 84,016). An app that downloads also gets mbedTLS, about 120 KB of
-  flash (debug build: 515,776 → 637,488 bytes; the template itself calls no download, so its
+  static RAM 100,672, heap 83,992). An app that downloads also gets mbedTLS, about 120 KB of
+  flash (debug build: 571,984 → 694,328 bytes; the template itself calls no download, so its
   release image leaves it out), and TLS sessions on the heap, about 40 KB at the peak. A TLS
-  handshake took core 0's stack to 3,168 bytes (Cloudflare's elliptic-curve one; 2,000-2,400 for
+  handshake took core 0's stack to 3,376 bytes (Cloudflare's elliptic-curve one; 2,000-2,400 for
   RSA servers), too close to 4 KB, so an HTTPS build gives core 0 `SCRATCH_X` as well: 8 KB, the
   guard at its bottom (`__core0_stack_takes_scratch_x` in `memmap_rp.ld`). The debug build's heap,
-  61.1 KB, peaked at 49.1 KB (9.3 KB at rest). lwIP's pbuf pool peaked at 25 of 32, with no
+  61.0 KB, peaked at 49.0 KB (9.1 KB at rest). lwIP's pbuf pool peaked at 25 of 32, with no
   failed allocation; with 24, a 1 MB HTTPS download ran it out twice, because the TLS layer
   decrypts into pool pbufs and `download.c` holds the body until the card has taken it.
 

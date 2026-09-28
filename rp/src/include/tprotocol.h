@@ -224,11 +224,13 @@ static inline void __not_in_flash_func(tprotocol_parse)(
       }
       break;
     case PAYLOAD_READ_INPROGRESS:
-      // Store the 16-bit chunk into the payload array
+      // Store the 16-bit chunk into the payload array. "l": Thumb-1's strh
+      // takes only r0-r7. With "r" a Release build with DEBUG_MODE=1 got ip
+      // and did not assemble ("lo register required").
       asm("strh %0, [%1]"
           :
-          : "r"(data),
-            "r"(&tprotocol_transmission
+          : "l"(data),
+            "l"(&tprotocol_transmission
                      .payload[(tprotocol_transmission.bytes_read / 2)])
           : "memory");
       tprotocol_transmission.bytes_read += 2;

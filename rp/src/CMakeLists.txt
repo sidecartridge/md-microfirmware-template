@@ -207,6 +207,15 @@ if(APP_DOWNLOAD_HTTPS)
     target_link_options(${PROJECT_NAME} PRIVATE
         "-Wl,--defsym=__core0_stack_takes_scratch_x=1")
     target_sources(${PROJECT_NAME} PRIVATE mbedtls_ms_time.c)
+    # mbedTLS itself is compiled -Os whatever the build type. At -O3 (CMake
+    # Release) every TLS download failed: the server closed the connection
+    # about 0.5 s into the handshake. Bisected on the device to
+    # library/gcm.c (AES-GCM, the suite servers pick) alone; the whole library
+    # stays at -Os, the configuration Booster ships and every test host passed
+    # with. TLS speed is set by the network, not by this.
+    file(GLOB MBEDTLS_LIBRARY_SOURCES ${PICO_SDK_PATH}/lib/mbedtls/library/*.c)
+    set_source_files_properties(${MBEDTLS_LIBRARY_SOURCES}
+        PROPERTIES COMPILE_OPTIONS "-Os")
     target_link_libraries(${PROJECT_NAME} PRIVATE
         pico_lwip_mbedtls    # lwIP's ALTCP-over-mbedTLS layer
         pico_mbedtls)        # mbedTLS
@@ -325,13 +334,15 @@ add_definitions(-DAPP_DOWNLOAD_HTTPS=${APP_DOWNLOAD_HTTPS})
 # the git commit) are regenerated on every build; see build_id.cmake. They are
 # rewritten only when the ID changes, so only their users recompile. The symbol
 # is kept through --gc-sections so tools/dev/swd.py can read it over SWD.
-# A debug build's ID ends in +debug and an HTTPS build's in +https (before
-# +debug), so builds of one tree cannot be taken for each other on the device.
+# A debug build's ID ends in +debug, an HTTPS build's in +https (before +debug)
+# and a build of another CMake type than Release carries that type (first), so
+# builds of one tree cannot be taken for each other on the device.
 set(BUILD_ID_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated/build_id)
 add_custom_target(build_id
     COMMAND ${CMAKE_COMMAND} -DSRC_DIR=${CMAKE_CURRENT_LIST_DIR}
             -DOUT_DIR=${BUILD_ID_DIR} -DDEBUG_BUILD=${_DEBUG}
             -DHTTPS_BUILD=${APP_DOWNLOAD_HTTPS}
+            -DCMAKE_TYPE=${CMAKE_BUILD_TYPE}
             -P ${CMAKE_CURRENT_LIST_DIR}/build_id.cmake
     BYPRODUCTS ${BUILD_ID_DIR}/build_id.h ${BUILD_ID_DIR}/build_id.c
     COMMENT "Checking the build ID")
