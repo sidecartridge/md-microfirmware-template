@@ -17,6 +17,8 @@ Top-level build is driven by `build.sh` in the repo root:
 # <build_type> = release | debug, any case; anything else stops the build (always compiled as MinSizeRel — see below)
 # <app_uuid_key> = UUID4 identifying this app, must match desc/app.json
 ./build.sh pico_w release 123e4567-e89b-12d3-a456-426614174000
+# The same, with HTTPS downloads built in (the default builds HTTP only):
+APP_DOWNLOAD_HTTPS=1 ./build.sh pico_w release 123e4567-e89b-12d3-a456-426614174000
 ```
 
 Required host environment:
@@ -32,6 +34,7 @@ Build flow (orchestrated by `build.sh`). Every script stops at the first failing
 
 ### Build gotchas
 - **CMake always builds with `-DCMAKE_BUILD_TYPE=MinSizeRel`** regardless of the `<build_type>` argument. A full `Release` previously caused breakage (memory/over-optimization). The legacy line is left commented in `rp/build.sh`. `<build_type>` sets `DEBUG_MODE` for both targets (`DPRINTF` and UART stdio on the RP, `_DEBUG` in the m68k assembly) and the dist filename.
+- **`APP_DOWNLOAD_HTTPS` picks the download profile** (`rp/src/CMakeLists.txt`). Unset or `0`, the default: HTTP only, no mbedTLS linked, and lwIP keeps its HTTP sizes; an `https://` URL fails with `DOWNLOAD_HTTPSNOTBUILT_ERROR` instead of being fetched over plain HTTP. `1`: HTTP and HTTPS, chosen per URL, with mbedTLS, lwIP's ALTCP-over-TLS layer and the larger lwIP window and pbuf pool a 16 KB TLS record needs. The C code, `lwipopts.h`, the URL buffers in `download.h` and the build ID (`+https`) all follow it; `httpc.c` is compiled into the firmware target (not a library of its own) so it cannot see another value, and a source built without it stops with an `#error`. `tools/dev/flash.sh` reads it too and builds into `tools/dev/builds/<type>-https`. VS Code builds HTTP only unless its environment sets it.
 - `RELEASE_DATE="YYYY-MM-DD HH:MM:SS"` fixes the date the images carry (the RP's debug banner, and the cartridge header's GEMDOS date and time), so two builds of one commit are byte-identical. Unset, it is the time of the build.
 - `.vscode/cmake-variants.yaml` gives VS Code's CMake Tools the same two builds (MinSizeRel, `DEBUG_MODE`, the development UUID `44444444-4444-4444-8444-444444444444`). With no `RELEASE_VERSION` in the environment, CMake reads `rp/version.txt`.
 - A stale `.git/modules/<submodule>/index.lock` stops the build at the pin step. Earlier scripts stepped over it and skipped the pin; if no git process is running, delete the lock.
@@ -41,7 +44,7 @@ Build flow (orchestrated by `build.sh`). Every script stops at the first failing
 - VASM/`stcmd` errors like `the input device is not a TTY` mean `stcmd` was invoked without a PTY. `target/atarist/build.sh` already exports `STCMD_NO_TTY=1` for every `stcmd` call it makes; you only need to export it yourself if invoking `stcmd` directly from a non-TTY context (CI, sub-shells, build wrappers). Without it `stcmd` fails. The build scripts stop on that; a `stcmd make` run by hand that fails leaves the previous `BOOT.BIN` in place, and an RP build from it displays garbage on the ST because `target_firmware.h` is stale.
 
 ### CI / release
-- `.github/workflows/build.yml` builds `pico_w` Release on PR.
+- `.github/workflows/build.yml` builds `pico_w` on every pull request: release and debug, each with `APP_DOWNLOAD_HTTPS` 0 and 1, so the profile the default build leaves out cannot stop compiling unnoticed.
 - `.github/workflows/release.yml` triggers on `v*` tags: builds, attaches UF2 + JSON to the GitHub Release, uploads to `s3://atarist.sidecartridge.com/`.
 - `make tag` tags HEAD with the contents of `version.txt` and pushes the tag (which triggers release). **In this template repo, don't tag** — a change lands as a `version.txt` bump plus a `CHANGELOG.md` entry; tagging/releasing is the repo owner's call. Apps generated from the template do tag.
 - `upload_s3.sh <file>` is a manual one-off uploader; needs `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`.
@@ -194,7 +197,7 @@ The RP2040's 2 MB flash is sliced into named regions, and code is responsible fo
 | `GLOBAL_CONFIG_FLASH` | `0x101FF000` | 4 K | Global config |
 | `RAM` | `0x20000000` | 192 K | Normal RAM (data, BSS, heap) |
 | `ROM_IN_RAM` | `0x20030000` | 64 K | The cartridge window the ST reads at `$FA0000` |
-| `SCRATCH_X` / `SCRATCH_Y` | `0x20040000` / `0x20041000` | 4 K each | Core 1 (never started) / core 0 stacks; core 0 has all 4 K |
+| `SCRATCH_X` / `SCRATCH_Y` | `0x20040000` / `0x20041000` | 4 K each | Core 1 (never started) / core 0 stacks; core 0 has all 4 K of `SCRATCH_Y`, and with HTTPS downloads `SCRATCH_X` too |
 
 The heap's limit, `__StackLimit`, is the end of `RAM`, where the cartridge window starts: the SDK's
 `sbrk` stops there, and with `PICO_MALLOC_PANIC=0` (set before `pico_sdk_init()` in

@@ -183,8 +183,11 @@ def openocd_command(work_area: bool = False) -> list[str]:
     # the next cyw43_arch_poll() HardFaulted. Every run that does not write
     # flash gets a 4 KB work area in SCRATCH_X instead, which is core 1's
     # stack in a firmware that never starts core 1 (core 0's stack guard is at
-    # the bottom of SCRATCH_Y, above it), backed up and restored. Flash writes
-    # keep the default: they halt the cores first and reset the chip after.
+    # the bottom of SCRATCH_Y, above it), backed up and restored. In a build
+    # with HTTPS downloads core 0's stack runs on down through SCRATCH_X; the
+    # work area is only used with the cores halted, and the backup puts the
+    # stack back. Flash writes keep the default: they halt the cores first and
+    # reset the chip after.
     if not work_area:
         cmd += ["-c", "rp2040.core0 configure -work-area-phys 0x20040000 "
                       "-work-area-size 0x1000 -work-area-backup 1"]

@@ -135,12 +135,8 @@ static err_t httpClientReceiveFileFn(__unused void *arg,
     return ERR_ABRT;  // Abort on failure
   }
 
-  // Acknowledge that we received the data
-#if BOOSTER_DOWNLOAD_HTTPS == 1
+  // Acknowledge that we received the data (plain TCP when LWIP_ALTCP is off)
   altcp_recved(conn, ptr->tot_len);
-#else
-  tcp_recved(conn, ptr->tot_len);
-#endif
 
   // Free the pbuf
   pbuf_free(ptr);

@@ -15,11 +15,12 @@
 #                              cut to 21 characters
 #   nogit                      not a git checkout
 #
-# A debug build (-DDEBUG_BUILD=1) appends +debug to any of these, so the ID in
-# flash tells a debug build from a release build of the same tree.
+# An HTTPS build (-DHTTPS_BUILD=1) appends +https and a debug build
+# (-DDEBUG_BUILD=1) +debug to any of these, so the ID in flash tells the builds
+# of one tree apart.
 #
 # Inputs: -DSRC_DIR=<rp/src> -DOUT_DIR=<folder for build_id.h and build_id.c>
-#         -DDEBUG_BUILD=<0|1>
+#         -DDEBUG_BUILD=<0|1> -DHTTPS_BUILD=<0|1>
 
 if(DEFINED ENV{RELEASE_BUILD_ID} AND NOT "$ENV{RELEASE_BUILD_ID}" STREQUAL "")
   set(BUILD_ID "$ENV{RELEASE_BUILD_ID}")
@@ -50,8 +51,11 @@ else()
   endif()
 endif()
 
-# Longest shape is 21 characters (<sha7>-dirty.<diff7>), 27 with +debug.
+# Longest shape is 21 characters (<sha7>-dirty.<diff7>), 33 with +https+debug.
 string(SUBSTRING "${BUILD_ID}" 0 21 BUILD_ID)
+if(HTTPS_BUILD)
+  set(BUILD_ID "${BUILD_ID}+https")
+endif()
 if(DEBUG_BUILD)
   set(BUILD_ID "${BUILD_ID}+debug")
 endif()
