@@ -487,7 +487,13 @@ static void termInputChar(char chr) {
     memset(inputBuffer, 0, TERM_INPUT_BUFFER_SIZE);
     inputLength = 0;
 
-    term_printString("> ");
+    // A command that drew the menu left its own "Select an option:" prompt,
+    // with the cursor on it: a "> " after it would read as a second prompt.
+    bool atMenuPrompt = menuPromptValid && (cursorY == menuPromptRow) &&
+                        (cursorX == menuPromptCol);
+    if (!atMenuPrompt) {
+      term_printString("> ");
+    }
     display_termRefresh();
     return;
   }
