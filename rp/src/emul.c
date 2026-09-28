@@ -511,7 +511,9 @@ void emul_start() {
   // files are stored. The folder name is defined in the configuration.
   // If there is no folder in the micro SD card, the app will create it.
 
-  FATFS fsys;
+  // Static, not on the stack: FatFs keeps a pointer to it while the card is
+  // mounted, and it would take a quarter of core 0's stack.
+  static FATFS fsys;
   SettingsConfigEntry *folder =
       settings_find_entry(aconfig_getContext(), ACONFIG_PARAM_FOLDER);
   char *folderName = "/test";  // MODIFY THIS TO YOUR FOLDER NAME

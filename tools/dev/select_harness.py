@@ -139,7 +139,8 @@ def case_restore(h: Harness, path: str) -> int:
         raise swd.SwdError(f"{path} is not a {length}-byte settings backup")
     out = swd.openocd(*swd.quiesce_commands(),
                       f"flash write_image erase {path} 0x{start:08x} bin",
-                      f"verify_image {path} 0x{start:08x} bin", check=False)
+                      f"verify_image {path} 0x{start:08x} bin", check=False,
+                      work_area=True)
     swd.chip_reset()
     ok = "verified" in out
     return verdict(ok, f"settings flash restored from {path} and RP reset")

@@ -128,6 +128,15 @@ A watchdog-style reset is the one that leaves the chip exactly as a power-on res
 and PIO stopped. If an old build shows that symptom, run `swd.py reset` or power-cycle. The same
 applies to a VS Code debug session's restart button.
 
+OpenOCD loads small routines into a RAM work area (`verify_image`'s CRC, the flash-size probe of a GDB
+connect). `rp2040.cfg` puts it at `0x20010000`, inside this firmware's RAM, where it once overwrote
+the Wi-Fi driver's async context and the next `cyw43_arch_poll()` HardFaulted. `swd.py` gives every
+run that does not write flash a 4 KB work area in `SCRATCH_X` instead, backed up and restored: that
+is core 1's stack, and this firmware never starts core 1. A firmware that does must move it. Flash
+writes keep the default, with the cores halted and a reset after. Do not attach GDB (`postmortem`)
+while the RP is rebooting: the flash probe of the connect, landing while boot2 sets up XIP, left
+flash unreadable and the firmware executing zeros until the next reset.
+
 A halted RP can still be read. Halting core 1 also pauses the RP2040's timer, so after a debugger
 halt run `resume`, which releases both cores; OpenOCD's own `resume` fails in a new OpenOCD run.
 

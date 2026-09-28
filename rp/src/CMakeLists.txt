@@ -81,6 +81,26 @@ include(${PICO_EXTRAS_PATH}/external/pico_extras_import.cmake)
 # Set name of project (as PROJECT_NAME) and C/C   standards
 project(rp C CXX)
 set(CMAKE_C_STANDARD 11)
+
+# malloc must return NULL on failure instead of panicking.
+#
+# This MUST come before pico_sdk_init(): the check that panics lives in the
+# SDK's own malloc.c, and pico_sdk_init() adds the SDK as a subdirectory, which
+# inherits compile definitions as they stand at that moment. Defined further
+# down, it would compile our sources with it and leave the SDK's malloc.c
+# untouched, which looks right and does nothing.
+#
+# The SDK default (PICO_MALLOC_PANIC 1) turns a failed allocation into
+# panic("Out of memory"), which defeats code written to handle NULL. FatFs's
+# directory creation is the case that matters: it asks for a buffer as large
+# as a cluster (32 KB on a large FAT32 card) and halves the request until it
+# fits, which it can only do if malloc is allowed to say no. Every allocation
+# in this firmware checks its result.
+if (NOT DEFINED ENV{PICO_MALLOC_PANIC})
+    set(ENV{PICO_MALLOC_PANIC} "0")
+endif()
+add_compile_definitions(PICO_MALLOC_PANIC=$ENV{PICO_MALLOC_PANIC})
+
 # Creates a pico-sdk subdirectory in our project for the libraries
 pico_sdk_init()
 
@@ -263,6 +283,17 @@ add_definitions(-DDISPLAY_ATARIST)
 
 # We don't modify the flash in Core 1
 add_definitions(-DPICO_FLASH_ASSUME_CORE0_SAFE=1)
+
+# Core 0's stack takes all of SCRATCH_Y (4 KB) instead of the SDK's 2 KB, and
+# a guard at its bottom turns an overflow into a HardFault instead of a silent
+# walk through SCRATCH_X into the cartridge window below it. Measured on an ST
+# with the setup menu: 1,696 bytes at the deepest. PICO_HEAP_SIZE is the heap
+# the link guarantees: a build whose static data leaves less fails to link.
+# Measured: 13.1 KB of heap at the peak after boot and the menu commands.
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    PICO_STACK_SIZE=0x1000
+    PICO_USE_STACK_GUARDS=1
+    PICO_HEAP_SIZE=0x8000)
 
 # Select HTTPS or HTTP downloads of the firmware
 add_definitions(-DAPP_DOWNLOAD_HTTPS=0)
