@@ -72,8 +72,9 @@ export BOARD_TYPE=${1:-pico_w}
 export PICO_BOARD=$BOARD_TYPE
 echo "Board type: $BOARD_TYPE"
 
-# Build type, case-insensitive. If nothing is passed, use release. debug is
-# the same build with DEBUG_MODE=1, so DPRINTF traces go to the UART console.
+# Build type, case-insensitive. If nothing is passed, use release. Both are
+# CMake Release (-O3); debug is the same build with DEBUG_MODE=1, so DPRINTF
+# traces go to the UART console and the SWD hooks are compiled in.
 BUILD_TYPE=$(echo "${2:-release}" | tr '[:upper:]' '[:lower:]')
 case "$BUILD_TYPE" in
     release) export DEBUG_MODE=0 ;;
@@ -84,7 +85,20 @@ case "$BUILD_TYPE" in
         ;;
 esac
 export BUILD_TYPE
-echo "Build type: $BUILD_TYPE (DEBUG_MODE=$DEBUG_MODE)"
+
+# Up to v1.2.x every build was compiled MinSizeRel, because a Release build
+# once broke at runtime (no reproducer was recorded). RP_CMAKE_BUILD_TYPE
+# replaces only the CMake build type: MinSizeRel to compare against those
+# builds, Debug (-Og, asserts on) to step through the code in a debugger.
+CMAKE_BUILD_TYPE_ARG=Release
+if [ -n "$RP_CMAKE_BUILD_TYPE" ]; then
+    CMAKE_BUILD_TYPE_ARG=$RP_CMAKE_BUILD_TYPE
+    echo "************************************************************"
+    echo "WARNING: RP_CMAKE_BUILD_TYPE=$RP_CMAKE_BUILD_TYPE overrides the"
+    echo "         CMake build type. This is not a shipping build."
+    echo "************************************************************"
+fi
+echo "Build type: $BUILD_TYPE (CMake $CMAKE_BUILD_TYPE_ARG, DEBUG_MODE=$DEBUG_MODE)"
 
 # Set the build and dist directories. Delete previous contents if any, so a
 # failed build can never leave an older UF2 behind for the caller to copy.
@@ -96,13 +110,9 @@ mkdir build dist
 # And previously pushed to the repo version
 
 # Build the project
-# NOTE: The project is always built with CMAKE_BUILD_TYPE=MinSizeRel.
-#       Using a full Release build previously caused breakage (e.g. memory issues/over‑optimizations).
 echo "Building the project"
 cd build
-# Legacy option to honor BUILD_TYPE instead of forcing MinSizeRel:
-# cmake ../src -DCMAKE_BUILD_TYPE=$BUILD_TYPE
-cmake ../src -DCMAKE_BUILD_TYPE=MinSizeRel
+cmake ../src -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE_ARG"
 
 make -j4
 cd ..

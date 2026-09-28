@@ -15,7 +15,8 @@
 # Environment: APP_UUID_KEY (default: the development UUID), OPENOCD and
 # PICO_OPENOCD_PATH (see swd.py), RELEASE_DATE (default: the date of the HEAD
 # commit, so builds of one commit are byte-identical), APP_DOWNLOAD_HTTPS=1 for
-# a build with HTTPS downloads (in tools/dev/builds/<type>-https).
+# a build with HTTPS downloads (in tools/dev/builds/<type>-https),
+# RP_CMAKE_BUILD_TYPE for a CMake type other than Release (as rp/build.sh).
 set -Eeo pipefail
 trap 'echo "ERROR: ${BASH_SOURCE[0]}: failed at line ${LINENO}" >&2' ERR
 
@@ -51,6 +52,10 @@ NAME="$TYPE"
 if [ "$APP_DOWNLOAD_HTTPS" = 1 ]; then
   NAME="$TYPE-https"
 fi
+# Another CMake type (RP_CMAKE_BUILD_TYPE) builds in its own folder too.
+if [ -n "${RP_CMAKE_BUILD_TYPE:-}" ]; then
+  NAME="$NAME-$(printf '%s' "$RP_CMAKE_BUILD_TYPE" | tr '[:upper:]' '[:lower:]')"
+fi
 # A source outside the repo gets its own build folder, keyed by its path: two
 # checkouts are both called rp/src, and sharing a folder confuses CMake's cache.
 if [ "$SRC" != "$REPO/rp/src" ]; then
@@ -80,8 +85,12 @@ fi
 export RELEASE_DATE
 
 echo "Building $NAME from $SRC"
-# Same CMake build type as rp/build.sh, which forces MinSizeRel.
-cmake -S "$SRC" -B "$OUT" -DCMAKE_BUILD_TYPE="${RP_CMAKE_BUILD_TYPE:-MinSizeRel}" \
+# Same CMake build type as rp/build.sh: Release, unless RP_CMAKE_BUILD_TYPE says
+# otherwise (MinSizeRel to compare, Debug to step through the code).
+if [ -n "${RP_CMAKE_BUILD_TYPE:-}" ]; then
+  echo "WARNING: RP_CMAKE_BUILD_TYPE=$RP_CMAKE_BUILD_TYPE: not a shipping build"
+fi
+cmake -S "$SRC" -B "$OUT" -DCMAKE_BUILD_TYPE="${RP_CMAKE_BUILD_TYPE:-Release}" \
   > "$OUT/cmake.log" 2>&1 \
   || { tail -20 "$OUT/cmake.log"; exit 1; }
 make -C "$OUT" -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc)" > "$OUT/make.log" 2>&1 \
