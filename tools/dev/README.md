@@ -100,6 +100,9 @@ python3 tools/dev/swd.py crash                                   # why did it la
 python3 tools/dev/swd.py postmortem                              # halt, backtraces, resume
 python3 tools/dev/swd.py heap                                    # heap size, peak, free space
 python3 tools/dev/swd.py counters                                # command channel counters, no halt
+python3 tools/dev/swd.py ring                                    # the ST's commands, decoded, no halt
+python3 tools/dev/swd.py ring --mark                             # ...then, after a test:
+python3 tools/dev/swd.py ring --since-mark                       # only what the ST sent since the mark
 python3 tools/dev/swd.py heap --watch 5 --csv tools/dev/logs/heap.csv   # sample during a test
 ```
 
@@ -166,6 +169,24 @@ Add an app's own commands the same way: a `DEVHOOKS_APP_<NAME>` define and a cas
 Useful ones in other microfirmwares: stop a boot countdown; stall or fail the next answer on
 purpose, to exercise the ST's retry path.
 
+`ring` decodes what the ST sent from the ROM3 capture ring (`commemul.c`) without halting the RP,
+on a release build as on a debug one. It holds the last 8,192 bus samples: about 800 small
+commands (6 to 10 samples each), or 15 writes of 1 KB. Each frame shows its sample number since the RP booted, the command (named
+from the `APP_<APP>` / `APP_<APP>_<COMMAND>` defines, as `term.h` has them, and chandler's
+framework commands; others print as hex), its payload size, the random token, the first four 32-bit
+parameters in the order `TPROTO_GET_PAYLOAD_PARAM32` reads them, and a mark on a bad checksum.
+The oldest frame is often cut by the ring's start and shows as a bad checksum. A frame whose size
+is past `MAX_PROTOCOL_PAYLOAD_SIZE` shows as dropped, as the RP drops it.
+The DMA keeps writing while the ring is read, so `ring` reads its write position before and
+after and drops the samples it may have overwritten meanwhile. During a sustained burst of 1 KB
+writes the ST sends about 200,000 samples a second and refills the ring in about 40 ms, faster
+than SWD copies it: `ring` then says so instead of printing half-overwritten frames, and reads
+normally once the burst is over. `--mark` stores the position in
+`tools/dev/logs/ring.mark` and `--since-mark` shows only what came after it, or says how much the
+ring lost in between. Commands sent with `key` or `inject` go through the mailbox, not the bus, so
+they never appear here. An ST reset through the sentinel shows up as `CHANDLER_ST_HELLO` and two
+`CHANDLER_SET_SHARED_VAR` (the machine, then the TOS version).
+
 `crash` prints the watchdog reason and scratch registers of the last reboot without stopping the
 RP, with code addresses resolved to source lines by `addr2line`.
 
@@ -192,6 +213,41 @@ OpenOCD is `$OPENOCD`, `openocd` on `PATH`, or `../pico/openocd/src/openocd`; it
 from `$PICO_OPENOCD_PATH`, the variable `.vscode/launch.json` uses. A command that fails on a
 momentary debug-port drop (common while the firmware changes its clock early in boot) is retried.
 Close a VS Code debug session first: only one program can use the probe.
+
+## Hardware harnesses
+
+Scripts that run a set of checks on the device and print PASS or FAIL for each. All need the
+Debug Probe and `console.py watch` running (they read its log, never the UART); each writes a JSON
+report to `logs/` and exits 0 only when every check passes.
+
+```bash
+python3 tools/dev/tools_harness.py --build --flash --reset   # every tool above, against the device
+python3 tools/dev/st_harness.py --oversize --long            # the command path, from the ST's side
+python3 tools/dev/power_cycles.py                            # cold boots: menu or GEM? (3 by default)
+```
+
+- `tools_harness.py` checks the tools themselves on a debug build: the running firmware and its
+  build ID, the console, `screen` / `text` / `shared`, the mailbox commands (`key`, `inject`,
+  `app heap_hold`), `counters`, `ring`, a SELECT press (which restarts the RP), `crash` and
+  `postmortem`. `--build` also builds both types and checks their flags and symbols, `--flash`
+  flashes the debug build first, and `--reset` restarts the RP at the end.
+- `st_harness.py` tests the command path from the ST's side. It copies the tree to
+  `builds/sttree`, puts `sttest.s` in place of `userfw.s`, builds and flashes that debug firmware,
+  resets the ST through the sentinel so it runs the new cartridge code, and starts the tests with
+  `[F]irmware`. The ST reports each result as a `$7Fxx` command, which the setup terminal logs:
+  - T0: the return address into TOS the cartridge hands over.
+  - T1: `d0 = 0` with Z set after each sender.
+  - T2: the registers each send keeps.
+  - T3 and T4: 100 small commands and 10 of 1 KB, none failed.
+  - T5 (`--oversize`): an oversize frame, then a command that must still be answered.
+  - T6 (`--long`): a burst of 3,000 commands of 1 KB, about 7 s.
+
+  `--connect-race` instead resets the ST and the RP together, and times the ST's boot commands
+  against the RP's Wi-Fi connect. The test firmware stays on the RP, so flash the real one
+  afterwards. The working tree is never touched.
+- `power_cycles.py` watches the log while you power-cycle the ST. For each boot it prints when the
+  cartridge went live and whether the ST said hello (setup menu) or not (GEM). Keep power cycles
+  few: every other ST boot can come from a reset through the sentinel.
 
 ## Measuring builds
 
