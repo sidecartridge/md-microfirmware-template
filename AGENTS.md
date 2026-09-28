@@ -68,6 +68,8 @@ A successful build leaves `dist/<UUID>-<version>.uf2` and
 | Build stops on missing `CHARACTER_GAP_MS` | Re-add `#define CHARACTER_GAP_MS 700` to `rp/src/include/blink.h`. |
 | `ERROR: cartridge code is N bytes; limit is 8192` | The m68k image outgrew its 8 KB budget. Trim `main.s`/`userfw.s` or move data out of the cartridge image into `APP_FREE` / the shared variables. |
 | `ERROR: <script>: failed at line N` | The step on that line failed; the real error is printed just above it. Every build script stops at the first failure, and `dist/` is left empty. |
+| ``region `RAM' overflowed`` at link time | Static data (`.bss`, `.data`) leaves less than the 32 KB heap the link guarantees (`PICO_HEAP_SIZE` in `rp/src/CMakeLists.txt`), or does not fit RAM at all. Move big buffers to the heap or shrink them. |
+| The RP resets with a HardFault in deep app code | Probably a stack overflow into core 0's stack guard. `swd.py crash`, and `crash_info_ram` holds the faulting PC; `tools/dev/stackdepth.py` lists the big frames. |
 | `ERROR: unknown build type` | The second argument must be `release` or `debug` (any case). |
 | `Unable to create '.../.git/modules/<submodule>/index.lock': File exists` | A git process died in that submodule earlier. If none is running, delete the lock and build again. |
 | The ST shows garbage but terminal commands still work | `target_firmware.h` is stale: a `stcmd make` run by hand failed and the previous `BOOT.BIN` survived (the build scripts stop on that failure), so the m68k is running against the wrong shared-region addresses. Compare the timestamp of `target/atarist/dist/BOOT.BIN` against the rest of `dist/`. |

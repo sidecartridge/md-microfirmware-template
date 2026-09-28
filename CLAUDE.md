@@ -164,7 +164,7 @@ The ST side is `target/atarist/src/inc/sidecart_functions.s` (`send_sync_command
 - **The two sides reboot independently.** The RP rewrites the 64 KB window when it boots, so anything the ST published at its own cold boot is gone after an RP-only reboot. Until the ST's next hello the setup menu says so and `[F]irmware` is refused, since user firmware relies on what the ST publishes at boot. The ST's print loop survives that (it runs from RAM and is stateless); `rom_function` does `jmp USERFW` into cartridge ROM, so user firmware that must outlive an RP reboot or a reflash has to relocate itself to RAM first.
 - **Answer first.** In `chandler_loop()` the token write is what releases the ST; an LED pulse (on a Pico W that is a CYW43 bus transaction), a blocking `DPRINTF`, or any other slow work goes after it.
 
-The RP drains the ring on every pass of its main loop and never waits: measured on an ST, about 2 ms per command with a 4-byte payload and 3 ms with 1 KB. The parser drops a frame whose payload size is past its buffer, and its 50 ms silence window restarts on every sample. Bringing Wi-Fi up blocks and drains nothing: `network_wifiInit()` took about 0.9 s on a Pico W, and at power-on the ST's boot hello waited that out, which it can, since `main.s` resends it until it is answered. Wi-Fi is polled every 10 ms from the same loop, not on every pass: polled flat out, the RP hard-faulted inside `cyw43_arch_poll()` for a reason not yet understood.
+The RP drains the ring on every pass of its main loop and never waits: measured on an ST, about 2 ms per command with a 4-byte payload and 3 ms with 1 KB. The parser drops a frame whose payload size is past its buffer, and its 50 ms silence window restarts on every sample. Bringing Wi-Fi up blocks and drains nothing: `network_wifiInit()` took about 0.9 s on a Pico W, and at power-on the ST's boot hello waited that out, which it can, since `main.s` resends it until it is answered. Wi-Fi is polled every 10 ms from the same loop, not on every pass: polled flat out, the RP hard-faulted inside `cyw43_arch_poll()` for a reason not yet understood. A HardFault at the same place, seen right after flashing, turned out to be the tools: OpenOCD's `rp2040.cfg` puts its work area at `0x20010000`, which in this firmware is the Wi-Fi driver's async context, and `verify_image` left its CRC routine there. `tools/dev/swd.py` now moves the work area to `SCRATCH_X`; whether that also explains the flat-out fault is not re-tested.
 
 Known defects in this path as the code stands — check before building on it:
 
@@ -184,11 +184,23 @@ The RP2040's 2 MB flash is sliced into named regions, and code is responsible fo
 | `GLOBAL_CONFIG_FLASH` | `0x101FF000` | 4 K | Global config |
 | `RAM` | `0x20000000` | 192 K | Normal RAM (data, BSS, heap) |
 | `ROM_IN_RAM` | `0x20030000` | 64 K | The cartridge window the ST reads at `$FA0000` |
-| `SCRATCH_X` / `SCRATCH_Y` | `0x20040000` / `0x20041000` | 4 K each | Core 1 / core 0 stacks (SDK default: 2 K reserved for core 0) |
+| `SCRATCH_X` / `SCRATCH_Y` | `0x20040000` / `0x20041000` | 4 K each | Core 1 (never started) / core 0 stacks; core 0 has all 4 K |
 
-The heap's limit, `__StackLimit`, is `ORIGIN(RAM) + LENGTH(RAM) + LENGTH(ROM_IN_RAM)`, so as the
-script stands the heap can grow into the cartridge window and overwrite the image the ST is
-reading. `tools/dev/swd.py heap` reports a heap size that includes the window for that reason.
+The heap's limit, `__StackLimit`, is the end of `RAM`, where the cartridge window starts: the SDK's
+`sbrk` stops there, and with `PICO_MALLOC_PANIC=0` (set before `pico_sdk_init()` in
+`rp/src/CMakeLists.txt`, the only place it reaches the SDK's `malloc.c`) malloc returns NULL instead
+of panicking. Every allocation in `rp/src` checks for NULL. Up to v1.2.1 the limit included the
+window, and a large allocation was handed addresses inside the image the ST reads.
+`PICO_HEAP_SIZE` (32 KB) is the heap the link guarantees: a build whose static data leaves less
+fails with ``region `RAM' overflowed``. Measured after boot and the menu commands: 13.1 KB.
+
+Core 0's stack is all of `SCRATCH_Y` (`PICO_STACK_SIZE` 4 KB) with an MPU guard on its bottom 32
+bytes (`PICO_USE_STACK_GUARDS`): an overflow is a HardFault, which `fatfs-sdk`'s crash handler
+records in `crash_info_ram` and resets. Measured by painting the stack over SWD, the setup menu,
+its commands and an ST reboot reach 1,696 bytes, and the boot with the Wi-Fi connect 1,392. Up to
+v1.2.1 the terminal copied a 4 KB protocol slot onto the stack, the same run reached 7,360 bytes,
+through core 1's stack, and stopped 832 bytes short of the cartridge window. Keep large buffers off
+the stack: `tools/dev/stackdepth.py` on a `tools/dev/measure_builds.sh` build lists every frame.
 
 The build assumes Core 0 owns flash writes (`PICO_FLASH_ASSUME_CORE0_SAFE=1`). The PIO bus emulation runs hot — Core 0 also overclocks to 225 MHz at `VREG_VOLTAGE_1_10`.
 
