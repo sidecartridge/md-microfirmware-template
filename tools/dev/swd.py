@@ -26,6 +26,7 @@ Usage:
     python3 tools/dev/swd.py crash [--elf ELF]
     python3 tools/dev/swd.py postmortem [--elf ELF] [--leave-halted]
     python3 tools/dev/swd.py heap [--elf ELF] [--watch SECONDS] [--csv FILE]
+    python3 tools/dev/swd.py ring [--mark | --since-mark] [--elf ELF]
 
 `running` waits until the vector table register (VTOR) holds the ELF's RAM
 vector table, which the SDK's runtime init installs, and core 0 is not halted:
@@ -47,6 +48,17 @@ without `--elf` they use the cached ELF whose build ID matches the RP.
 `text` prints the terminal's character buffer (the `screen` array of term.c),
 which is the setup menu as text; the bottom status line is drawn straight to
 the framebuffer and only shows in `screen`.
+
+`ring` decodes the commands the ST sent from the ROM3 capture ring
+(commemul.c), without halting and on a release build as on a debug one: the
+last 8,192 samples (about 800 small commands), oldest first. Each frame shows its
+sample number, the command (named from the APP_<APP> / APP_<APP>_<COMMAND>
+defines and chandler's framework commands in rp/src/include), the payload
+size, the random token, the first 32-bit parameters in the order the RP's
+TPROTO_GET_PAYLOAD_PARAM32 reads them, and whether its checksum holds.
+`--mark` remembers the position (in tools/dev/logs/ring.mark), and
+`--since-mark` shows only what arrived after it. Commands sent with `key` or
+`inject` go through the mailbox, not the bus, so they never show here.
 
 `select` presses the SELECT button: it forces the pin's input high through the
 GPIO input override (IO_BANK0 GPIOn_CTRL.INOVER) for the hold time, so the
@@ -132,6 +144,13 @@ COUNTERS = ("chandlerHandled", "chandlerDropped", "chandlerRepeated",
 POSTMORTEM_VARIABLES = ("keepActive", "menuScreenActive", "protocolPending",
                         "incrementalCmdCount", "commReadIdx") + COUNTERS
 BUILD_ID_SYMBOL = "release_build_id"
+# The ROM3 capture ring (commemul.c): its DMA channel's registers, and where
+# `ring --mark` keeps its position. RING_PARAMS 32-bit parameters are printed.
+COMMEMUL_C = os.path.join(REPO, "rp", "src", "commemul.c")
+DMA_BASE, DMA_CHANNEL_STRIDE, DMA_WRITE_ADDR, DMA_CHANNELS = (
+    0x50000000, 0x40, 0x04, 12)
+RING_MARK = os.path.join(HERE, "logs", "ring.mark")
+RING_PARAMS = 4
 # The shared variables are one block of CHANDLER_SHARED_VARIABLES_SLOTS indexed
 # 4-byte slots (chandler.h); an index past it is not a shared variable.
 SVAR_MAX_SLOTS = 60
@@ -610,6 +629,163 @@ def cmd_counters(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_names(defs: dict[str, int]) -> dict[int, str]:
+    """Protocol command IDs to names: APP_<APP>_<COMMAND> defines under their
+    APP_<APP> app ID, as term.h does, and chandler's framework commands."""
+    names: dict[int, str] = {}
+    small = {k: v for k, v in defs.items() if k.startswith("APP_") and 0 <= v <= 0xFF}
+    for name, value in sorted(small.items()):
+        parts = name.split("_")
+        for cut in range(len(parts) - 1, 1, -1):
+            app = "_".join(parts[:cut])
+            if app in small:
+                names.setdefault((small[app] << 8) | value, name)
+                break
+    framework = defs.get("CHANDLER_APP_FRAMEWORK")
+    for name, value in sorted(defs.items()):
+        if (name.startswith("CHANDLER_") and framework is not None and
+                0 <= value <= 0xFFFF and value >> 8 == framework):
+            names.setdefault(value, name)
+    return names
+
+
+def ring_snapshot(elf: str) -> tuple[list[int], int, int]:
+    """The capture ring's samples, oldest first, with the DMA's count of
+    samples written when the read started and how many arrived during it.
+    Only the samples the DMA cannot have overwritten while they were read are
+    returned: the window ends at the write position read before the copy and
+    loses one sample at its old end for each that arrived during it."""
+    sym = elf_symbols(elf, "commRing", "commDmaChannel")
+    if len(sym) < 2:
+        raise SwdError(f"{os.path.basename(elf)} lacks commRing or commDmaChannel")
+    base, size = sym["commRing"]
+    words = size // 2
+    channel = read_word(sym["commDmaChannel"][0])
+    if channel >= DMA_CHANNELS:
+        raise SwdError("the capture DMA channel is not claimed: "
+                       "has commemul_init() run?")
+    regs = DMA_BASE + DMA_CHANNEL_STRIDE * channel + DMA_WRITE_ADDR
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "ring.bin")
+        out = openocd(f"mdw 0x{regs:08x} 2", f"dump_image {path} 0x{base:08x} {size}",
+                      f"mdw 0x{regs:08x} 2")
+        with open(path, "rb") as f:
+            data = f.read()
+    reads = re.findall(rf"0x{regs:08x}:\s+([0-9a-fA-F]{{8}})\s+([0-9a-fA-F]{{8}})", out)
+    if len(reads) != 2 or len(data) != size:
+        raise SwdError("cannot read the capture ring")
+    (write1, left1), (_, left2) = [(int(a, 16), int(b, 16)) for a, b in reads]
+    if not base <= write1 < base + size:
+        raise SwdError(f"the capture DMA writes 0x{write1:08x}, outside the ring")
+    total = header_defines(COMMEMUL_C)["COMM_DMA_TRANSFER_COUNT"]
+    during = (left1 - left2) & 0xFFFFFFFF
+    if during >= words:
+        raise SwdError("the ST filled the ring while it was read: read again")
+    samples = struct.unpack(f"<{words}H", data)
+    end = (write1 - base) // 2
+    written = (total - left1) & 0xFFFFFFFF
+    # RAM survives a reset: past what this boot wrote lie the last boot's samples.
+    keep = min(words - during, written)
+    window = [samples[(end - keep + i) % words] for i in range(keep)]
+    return window, written, during
+
+
+def decode_frames(values: list[int], header: int,
+                  max_payload: int) -> list[dict]:
+    """Frames in a stream of 16-bit values, parsed as tprotocol_parse() does:
+    header, command, payload size in bytes, the payload's words, and a checksum
+    of the command, the size and the payload."""
+    frames = []
+    i, n = 0, len(values)
+    while i < n:
+        if values[i] != header:
+            i += 1
+            continue
+        if i + 2 >= n:
+            frames.append({"pos": i, "incomplete": True})
+            break
+        command, size = values[i + 1], values[i + 2]
+        if size > max_payload:
+            frames.append({"pos": i, "command": command, "size": size,
+                           "oversize": True})
+            i += 3  # the parser goes back to looking for a header
+            continue
+        last = i + 3 + (size + 1) // 2
+        if last >= n:
+            frames.append({"pos": i, "incomplete": True, "command": command})
+            break
+        payload = values[i + 3:last]
+        expected = (command + size + sum(payload[:size // 2])) & 0xFFFF
+        frames.append({"pos": i, "command": command, "size": size,
+                       "payload": payload, "ok": values[last] == expected})
+        i = last + 1
+    return frames
+
+
+def cmd_ring(args: argparse.Namespace) -> int:
+    """The commands the ST sent, decoded from the ROM3 capture ring."""
+    elf = matching_elf(args.elf)
+    defs = include_defines()
+    samples, written, during = ring_snapshot(elf)
+    if args.mark:
+        os.makedirs(os.path.dirname(RING_MARK), exist_ok=True)
+        with open(RING_MARK, "w", encoding="utf-8") as f:
+            f.write(f"{written}\n")
+        print(f"marked at sample {written}")
+        return 0
+    first = written - len(samples)
+    note = ""
+    if args.since_mark:
+        try:
+            with open(RING_MARK, encoding="utf-8") as f:
+                mark = int(f.read())
+        except (OSError, ValueError):
+            raise SwdError(f"no mark: run `ring --mark` first ({RING_MARK})")
+        if mark > written:
+            note = "the RP restarted since the mark: the whole ring follows"
+        elif mark < first:
+            note = (f"{first - mark} samples since the mark were overwritten "
+                    "before this read")
+        else:
+            samples = samples[mark - first:]
+            first = mark
+    flip = defs["CHANDLER_ADDRESS_HIGH_BIT"]
+    values = [s ^ flip for s in samples]
+    frames = decode_frames(values, defs["PROTOCOL_HEADER"],
+                           defs["MAX_PROTOCOL_PAYLOAD_SIZE"])
+    names = command_names(defs)
+    for fr in frames:
+        at = f"#{first + fr['pos']}"
+        if fr.get("incomplete"):
+            print(f"{at:>12}  (a frame still arriving)")
+            continue
+        name = names.get(fr["command"], f"0x{fr['command']:04x}")
+        line = f"{at:>12}  {name:28}{fr['size']:5} B"
+        if fr.get("oversize"):
+            print(f"{line}  past MAX_PROTOCOL_PAYLOAD_SIZE: dropped, as the RP does")
+            continue
+        p = fr["payload"]
+        if len(p) >= 2:
+            line += f"  token 0x{(p[0] << 16) | p[1]:08x}"
+        params = [(p[k + 1] << 16) | p[k] for k in range(2, len(p) - 1, 2)]
+        line += "".join(f" 0x{x:08x}" for x in params[:RING_PARAMS])
+        if len(params) > RING_PARAMS:
+            line += " ..."
+        if not fr["ok"]:
+            line += "  CHECKSUM MISMATCH"
+        print(line)
+    whole = [fr for fr in frames if "ok" in fr]
+    bad = sum(1 for fr in whole if not fr["ok"])
+    dropped = sum(1 for fr in frames if fr.get("oversize"))
+    span = f"#{first} to #{written - 1}" if samples else "none yet"
+    print(f"{len(whole)} frames, {bad} with a bad checksum"
+          + (f", {dropped} oversize dropped" if dropped else "")
+          + f", in {len(samples)} samples ({span}); {during} arrived while reading")
+    if note:
+        print(note)
+    return 0
+
+
 def cmd_heap(args: argparse.Namespace) -> int:
     elf = matching_elf(args.elf)
     csv = None
@@ -989,6 +1165,16 @@ def build_parser() -> argparse.ArgumentParser:
                         "without halting")
     cn.add_argument("--elf")
     cn.set_defaults(func=cmd_counters)
+
+    rg = sub.add_parser("ring", help="the ST's commands, decoded from the "
+                        "capture ring without halting")
+    rg.add_argument("--elf")
+    mark = rg.add_mutually_exclusive_group()
+    mark.add_argument("--mark", action="store_true",
+                      help="remember the ring's position and print nothing")
+    mark.add_argument("--since-mark", action="store_true",
+                      help="only what the ST sent since the last --mark")
+    rg.set_defaults(func=cmd_ring)
 
     hp = sub.add_parser("heap", help="heap size, peak and free space")
     hp.add_argument("--elf")

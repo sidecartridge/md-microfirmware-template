@@ -100,6 +100,9 @@ python3 tools/dev/swd.py crash                                   # why did it la
 python3 tools/dev/swd.py postmortem                              # halt, backtraces, resume
 python3 tools/dev/swd.py heap                                    # heap size, peak, free space
 python3 tools/dev/swd.py counters                                # command channel counters, no halt
+python3 tools/dev/swd.py ring                                    # the ST's commands, decoded, no halt
+python3 tools/dev/swd.py ring --mark                             # ...then, after a test:
+python3 tools/dev/swd.py ring --since-mark                       # only what the ST sent since the mark
 python3 tools/dev/swd.py heap --watch 5 --csv tools/dev/logs/heap.csv   # sample during a test
 ```
 
@@ -165,6 +168,24 @@ then Enter (`swd.py key h`, then `swd.py key $'\n'`). `app NAME` runs the app co
 Add an app's own commands the same way: a `DEVHOOKS_APP_<NAME>` define and a case in the handler.
 Useful ones in other microfirmwares: stop a boot countdown; stall or fail the next answer on
 purpose, to exercise the ST's retry path.
+
+`ring` decodes what the ST sent from the ROM3 capture ring (`commemul.c`) without halting the RP,
+on a release build as on a debug one. It holds the last 8,192 bus samples: about 800 small
+commands (6 to 10 samples each), or 15 writes of 1 KB. Each frame shows its sample number since the RP booted, the command (named
+from the `APP_<APP>` / `APP_<APP>_<COMMAND>` defines, as `term.h` has them, and chandler's
+framework commands; others print as hex), its payload size, the random token, the first four 32-bit
+parameters in the order `TPROTO_GET_PAYLOAD_PARAM32` reads them, and a mark on a bad checksum.
+The oldest frame is often cut by the ring's start and shows as a bad checksum. A frame whose size
+is past `MAX_PROTOCOL_PAYLOAD_SIZE` shows as dropped, as the RP drops it.
+The DMA keeps writing while the ring is read, so `ring` reads its write position before and
+after and drops the samples it may have overwritten meanwhile. During a sustained burst of 1 KB
+writes the ST sends about 200,000 samples a second and refills the ring in about 40 ms, faster
+than SWD copies it: `ring` then says so instead of printing half-overwritten frames, and reads
+normally once the burst is over. `--mark` stores the position in
+`tools/dev/logs/ring.mark` and `--since-mark` shows only what came after it, or says how much the
+ring lost in between. Commands sent with `key` or `inject` go through the mailbox, not the bus, so
+they never appear here. An ST reset through the sentinel shows up as `CHANDLER_ST_HELLO` and two
+`CHANDLER_SET_SHARED_VAR` (the machine, then the TOS version).
 
 `crash` prints the watchdog reason and scratch registers of the last reboot without stopping the
 RP, with code addresses resolved to source lines by `addr2line`.

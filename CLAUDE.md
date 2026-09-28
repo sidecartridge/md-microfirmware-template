@@ -66,7 +66,9 @@ repeatable (its `README.md` has the full command list):
 - `swd.py` reads a *running* RP over SWD: `screen` renders the framebuffer as the ST sees it
   (a PNG), `text` prints the terminal buffer, `shared` dumps the sentinel/token/shared variables,
   `counters` reads the command channel's counters (commands answered, dropped, repeated, checksum
-  errors, ring overruns, busy/gap/quiet time) without halting, `heap` reads newlib's allocator, `crash` explains the last reboot and `postmortem` halts for
+  errors, ring overruns, busy/gap/quiet time) without halting, `ring` decodes the commands the ST
+  sent from the capture ring (`--mark` / `--since-mark` around a test), on release builds too,
+  `heap` reads newlib's allocator, `crash` explains the last reboot and `postmortem` halts for
   backtraces. On debug builds `key`, `inject` and `app` drive the firmware through the devhooks
   mailbox (`rp/src/include/devhooks.h`): `swd.py key h` then `swd.py key $'\n'` runs the `h`
   menu command, `swd.py app heap_hold 16` holds 16 KB of heap. They rely on the ELF keeping its
