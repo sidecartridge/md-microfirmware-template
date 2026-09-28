@@ -638,9 +638,10 @@ void emul_start() {
       }
     }
 #if PICO_CYW43_ARCH_POLL
-    // Wi-Fi every 10 ms, not on every pass: polled flat out (hundreds of
-    // thousands of times a second) the RP hard-faulted inside
-    // cyw43_arch_poll(), for a reason not yet understood.
+    // Wi-Fi every 10 ms, which is plenty for lwIP's timers and leaves the
+    // loop to the command ring. Polling on every pass also works: a HardFault
+    // inside cyw43_arch_poll() once blamed on it was the debug probe's tooling
+    // writing into this firmware's RAM (fixed in tools/dev/swd.py).
     if (absolute_time_diff_us(nextNetworkPoll, get_absolute_time()) >= 0) {
       network_safePoll();
       nextNetworkPoll = make_timeout_time_ms(10);

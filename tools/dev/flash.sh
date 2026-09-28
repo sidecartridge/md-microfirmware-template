@@ -56,7 +56,7 @@ mkdir -p "$OUT" "$HERE/builds/elf"
 # Same environment as rp/build.sh, without its submodule checkout: this script
 # is for fast iteration and the pins are only verified, never changed.
 for pin in "pico-sdk tags/2.2.0" "pico-extras tags/sdk-2.2.0" \
-           "fatfs-sdk 6bdb39f96fe8b897aff12bf3416e32515792e318"; do
+           "fatfs-sdk tags/v3.6.2"; do
   set -- $pin
   if [ "$(git -C "$REPO/$1" rev-parse HEAD)" != "$(git -C "$REPO/$1" rev-parse "$2^{commit}")" ]; then
     echo "WARNING: $1 is not at $2; run rp/build.sh once to pin it" >&2

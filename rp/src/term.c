@@ -487,7 +487,13 @@ static void termInputChar(char chr) {
     memset(inputBuffer, 0, TERM_INPUT_BUFFER_SIZE);
     inputLength = 0;
 
-    term_printString("> ");
+    // A command that drew the menu left its own "Select an option:" prompt,
+    // with the cursor on it: a "> " after it would read as a second prompt.
+    bool atMenuPrompt = menuPromptValid && (cursorY == menuPromptRow) &&
+                        (cursorX == menuPromptCol);
+    if (!atMenuPrompt) {
+      term_printString("> ");
+    }
     display_termRefresh();
     return;
   }
@@ -754,7 +760,11 @@ void term_printNetworkInfo(void) {
     bool dhcpEnabled = (dhcpChar == 't') || (dhcpChar == 'T') ||
                        (dhcpChar == '1') || (dhcpChar == 'y') ||
                        (dhcpChar == 'Y');
-    snprintf(ipMode, sizeof(ipMode), "%s", dhcpEnabled ? "DHCP" : "Static");
+    // A rejected static configuration fell back to DHCP (the reason is on
+    // the debug console): show what is in use, not what was asked for.
+    bool staticRejected = network_getStaticConfigRejected(NULL);
+    snprintf(ipMode, sizeof(ipMode), "%s",
+             (dhcpEnabled || staticRejected) ? "DHCP" : "Static");
   }
 
   const char *wifiMacValue = network_getCyw43MacStr();
