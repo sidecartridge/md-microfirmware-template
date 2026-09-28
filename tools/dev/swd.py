@@ -134,7 +134,7 @@ class SwdError(Exception):
     pass
 
 
-def openocd_command() -> list[str]:
+def openocd_command(work_area: bool = False) -> list[str]:
     ocd = os.environ.get("OPENOCD") or shutil.which("openocd")
     if not ocd:
         local = os.path.join(REPO, "..", "pico", "openocd", "src", "openocd")
@@ -147,8 +147,22 @@ def openocd_command() -> list[str]:
         os.path.dirname(os.path.realpath(ocd)), "..", "tcl")
     if os.path.isfile(os.path.join(scripts, "interface", "cmsis-dap.cfg")):
         cmd += ["-s", scripts]
-    return cmd + ["-f", "interface/cmsis-dap.cfg", "-f", "target/rp2040.cfg",
-                  "-c", "adapter speed 5000"]
+    cmd += ["-f", "interface/cmsis-dap.cfg", "-f", "target/rp2040.cfg",
+            "-c", "adapter speed 5000"]
+    # OpenOCD's rp2040.cfg puts its work area, where it loads routines such as
+    # verify_image's CRC and the flash-size probe of a GDB connect, at
+    # 0x20010000: inside the firmware's live RAM. After flashing, the CRC
+    # routine was found there, over the Wi-Fi driver's async context (its
+    # first word, 0x20004602, is the routine's first two instructions), and
+    # the next cyw43_arch_poll() HardFaulted. Every run that does not write
+    # flash gets a 4 KB work area in SCRATCH_X instead, which is core 1's
+    # stack in a firmware that never starts core 1 (core 0's stack guard is at
+    # the bottom of SCRATCH_Y, above it), backed up and restored. Flash writes
+    # keep the default: they halt the cores first and reset the chip after.
+    if not work_area:
+        cmd += ["-c", "rp2040.core0 configure -work-area-phys 0x20040000 "
+                      "-work-area-size 0x1000 -work-area-backup 1"]
+    return cmd
 
 
 # The debug port can drop for a moment, for example while the firmware changes
@@ -158,10 +172,12 @@ TRANSIENT = re.compile(r"Failed to read memory|Error connecting DP|"
 ATTEMPTS = 4
 
 
-def openocd(*commands: str, check: bool = True) -> str:
+def openocd(*commands: str, check: bool = True, work_area: bool = False) -> str:
     """Run OpenOCD with `init`, the commands and `exit`; return its output.
-    A run that failed on a transient debug-port error is repeated."""
-    args = openocd_command() + ["-c", "init"]
+    A run that failed on a transient debug-port error is repeated. Only a run
+    that writes flash, with the cores halted, asks for OpenOCD's default work
+    area (see openocd_command)."""
+    args = openocd_command(work_area) + ["-c", "init"]
     for c in commands:
         args += ["-c", c]
     args += ["-c", "exit"]
@@ -887,7 +903,7 @@ def cmd_program(args: argparse.Namespace) -> int:
     # Not OpenOCD's `program`: it resets with OpenOCD's own sequence first,
     # which leaves DMA running (see quiesce_commands) and touches core 1.
     out = openocd(*quiesce_commands(), f"flash write_image erase {args.elf}",
-                  f"verify_image {args.elf}", check=False)
+                  f"verify_image {args.elf}", check=False, work_area=True)
     if not re.search(r"verified \d+ bytes", out):
         chip_reset()
         raise SwdError("flash write did not verify: " + " / ".join(
