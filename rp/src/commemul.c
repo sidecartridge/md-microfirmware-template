@@ -14,7 +14,19 @@
 #include "hardware/dma.h"
 #include "hardware/pio.h"
 
-#define COMM_RING_BITS 15u
+// The ring has to hold what the ST can send while this side is not draining
+// it. The ST's sends are synchronous: it sends one frame and waits for the
+// answer, then resends it with a fresh token, CMD_RETRIES_COUNT (3) times,
+// before it gives up. One sample per 16-bit word, so the largest frame is the
+// header, command, size, token and checksum words plus
+// MAX_PROTOCOL_PAYLOAD_SIZE (2,112 bytes) of payload: about 1,060 samples, and
+// a whole send with its retries is 4 x 1,060 = 4,240. The longest wait without
+// a drain is bringing Wi-Fi up (about 0.9 s), which that covers. 2^13 words
+// (4,096) would be just short, so 2^14 (8,192 samples, 16 KB): about two whole
+// sends. A lap beyond that is counted in commOverruns and its samples dropped.
+// The ring must be aligned to its size for the DMA's address wrap, and a
+// smaller ring also wastes less RAM on that alignment.
+#define COMM_RING_BITS 14u
 #define COMM_RING_SIZE_BYTES (1ul << COMM_RING_BITS)
 #define COMM_RING_WORDS (COMM_RING_SIZE_BYTES / sizeof(uint16_t))
 #define COMM_RING_MASK (COMM_RING_WORDS - 1u)
