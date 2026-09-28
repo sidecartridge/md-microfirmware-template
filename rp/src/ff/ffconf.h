@@ -207,11 +207,11 @@ function needs to implement /  GET_SECTOR_SIZE command. */
 / System Configurations
 /---------------------------------------------------------------------------*/
 
-#if defined(_DEBUG) && (_DEBUG != 0)
+/* The same value for every build type: a debug build must differ from a
+/  release build only by its traces, not by the size of every FIL object. 1
+/  shares one sector buffer instead of 512 bytes per open file; md-devops
+/  measured no cost for it copying files from the ST. */
 #define FF_FS_TINY 1
-#else
-#define FF_FS_TINY 0
-#endif
 /* This option switches tiny buffer configuration. (0:Normal or 1:Tiny)
 /  At the tiny configuration, size of file object (FIL) is shrinked FF_MAX_SS
 bytes. /  Instead of private sector buffer eliminated from the file object,
@@ -248,6 +248,13 @@ number.
 /  bit1=1: Do not trust last allocated cluster number in the FSINFO.
 */
 
+/* The most files and directories open at once, each entry about 16 bytes of
+/  RAM. The template opens at most one file (download.c) and keeps no directory
+/  open; 8 leaves room for an app's own. An app sets it to the most it keeps
+/  open at once, with room for what the ST can hold open through it
+/  (md-drives-emulator uses 32). When the table is full, f_open and f_opendir
+/  return FR_TOO_MANY_OPEN_FILES: report that as its own condition, not as a
+/  missing file or a disk error. */
 #define FF_FS_LOCK 8
 /* The option FF_FS_LOCK switches file lock function to control duplicated file
 open /  and illegal operation to open objects. This option must be 0 when
