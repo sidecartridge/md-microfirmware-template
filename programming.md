@@ -395,53 +395,35 @@ This modelo implements the commands that listen for remote keystrokes and conver
 
 ##### download.c
 
-As the name suggests, this module is responsible for downloading any kind of file from a remote HTTP/S server and saving it to the micro SD card. It uses the `httpc` library to implement the functionality.
+As the name suggests, this module is responsible for downloading any kind of file from a remote HTTP server and saving it to the micro SD card, through `tmp.download` in the app folder. It uses lwIP's HTTP client (`httpc/`). `https://` needs a build with HTTPS (`APP_DOWNLOAD_HTTPS=1 ./build.sh ...`); the default build refuses it with `DOWNLOAD_HTTPSNOTBUILT_ERROR`. The server's certificate is not verified.
 
-The file download is implemented aysnchronously, so the app can continue running while the file is being downloaded. To download a file, it must be polled in a loop. This is an example from the `md-rom-emulator` microfirmware app:
+The download runs asynchronously: `download_poll()` never waits, so call it from the main loop, which keeps serving the ST, while the status is `DOWNLOAD_STATUS_STARTED` or `DOWNLOAD_STATUS_IN_PROGRESS`. It follows redirects and retries a failed hop by itself. Only a 2xx response reaches the file; on any failure the temporary file is deleted, the status is `DOWNLOAD_STATUS_FAILED`, and `download_finish()` returns the reason (also `download_getError()` and `download_getHttpStatus()`). A sketch:
 
 ```c
-  DPRINTF("Start the app loop here\n");
-  absolute_time_t startDownloadTime =
-      make_timeout_time_ms(DOWNLOAD_DAY_MS);  // Future time
+  download_setFilepath("http://example.com/files/GAME.ST");  // saved as GAME.ST
+  if (download_start() != DOWNLOAD_OK) {
+    DPRINTF("Cannot start: %d\n", download_getError());
+  }
   while (getKeepActive()) {
-#if PICO_CYW43_ARCH_POLL
-    network_safe_poll();
-    cyw43_arch_wait_for_work_until(wifi_scan_time);
-#else
-    sleep_ms(SLEEP_LOOP_MS);
-#endif
-    // Check remote commands
+    chandler_loop();  // keep answering the ST
     term_loop();
-
-    // Check the download status
     switch (download_getStatus()) {
-      case DOWNLOAD_STATUS_REQUESTED: {
-        startDownloadTime = make_timeout_time_ms(
-            DOWNLOAD_START_MS);  // 3 seconds to start the download
-        download_setStatus(DOWNLOAD_STATUS_NOT_STARTED);
-        break;
-      }
-      case DOWNLOAD_STATUS_NOT_STARTED: {
-        if ((absolute_time_diff_us(get_absolute_time(), startDownloadTime) <
-             0)) {
-          download_err_t err = download_start();
-          if (err != DOWNLOAD_OK) {
-            DPRINTF("Error downloading app. Drive to error page.\n");
-          }
-        }
-        break;
-      }
-      case DOWNLOAD_STATUS_IN_PROGRESS: {
+      case DOWNLOAD_STATUS_STARTED:
+      case DOWNLOAD_STATUS_IN_PROGRESS:
         download_poll();
         break;
-      }
-      case DOWNLOAD_STATUS_COMPLETED: {
-        // Save the app info to the SD card
+      case DOWNLOAD_STATUS_COMPLETED:
         download_finish();
-        download_confirm();
+        download_confirm();  // tmp.download -> GAME.ST
         download_setStatus(DOWNLOAD_STATUS_IDLE);
         break;
-      }
+      case DOWNLOAD_STATUS_FAILED:
+        DPRINTF("Download failed: %d (HTTP %d)\n", download_finish(),
+                download_getHttpStatus());
+        download_setStatus(DOWNLOAD_STATUS_IDLE);
+        break;
+      default:
+        break;
     }
   }
 ```

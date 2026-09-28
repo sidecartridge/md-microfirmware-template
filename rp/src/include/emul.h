@@ -25,5 +25,11 @@ void emul_start();
 //                  answers 0 when the allocation is refused, so repeated calls
 //                  walk the heap down to a known remainder.
 #define DEVHOOKS_APP_HEAP_HOLD 1
+//   download       download the URL the host wrote into devdownloadState
+//                  (devdownload.h) to the app folder, then hash it; answers 1
+//                  when started, 0 while one runs.
+//                  tools/dev/download_harness.py drives it and reads the
+//                  outcome.
+#define DEVHOOKS_APP_DOWNLOAD 2
 
 #endif  // EMUL_H

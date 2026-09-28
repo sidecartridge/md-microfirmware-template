@@ -224,6 +224,7 @@ report to `logs/` and exits 0 only when every check passes.
 python3 tools/dev/tools_harness.py --build --flash --reset   # every tool above, against the device
 python3 tools/dev/st_harness.py --oversize --long            # the command path, from the ST's side
 python3 tools/dev/power_cycles.py                            # cold boots: menu or GEM? (3 by default)
+python3 tools/dev/download_harness.py                        # real downloads, checked by MD5
 ```
 
 - `tools_harness.py` checks the tools themselves on a debug build: the running firmware and its
@@ -243,8 +244,22 @@ python3 tools/dev/power_cycles.py                            # cold boots: menu 
   - T6 (`--long`): a burst of 3,000 commands of 1 KB, about 7 s.
 
   `--connect-race` instead resets the ST and the RP together, and times the ST's boot commands
-  against the RP's Wi-Fi connect. The test firmware stays on the RP, so flash the real one
+  against the RP's Wi-Fi connect. `--no-build --no-flash --no-reboot` runs the tests again at once
+  on an ST still in the setup menu from a run: with `download_harness.py --url ... --no-wait` just
+  before, the command path is tested while a download runs. The test firmware stays on the RP, so flash the real one
   afterwards. The working tree is never touched.
+- `download_harness.py` downloads the files Booster downloads, on the device, and checks each by
+  MD5. The expected hashes are read at run time: F1 is `upgrade.bin` against `upgrade.md5`, F2 a
+  catalog microfirmware against the catalog's MD5, F3 the catalog itself, F4 a catalog entry behind
+  a GitHub redirect chain, and F5 a missing file, which must fail. PORT writes the port out, and
+  LONG is a URL past the build's limit, which must be refused. On an HTTPS build (`+https` in
+  the build ID) every case runs over http:// and https://; on an HTTP build `https://` must fail
+  as not built in. For a failure it checks the reason (`download_err_t`, read from `download.h`)
+  and that no file was left. The download runs in the debug-only `rp/src/devdownload.c`, through
+  `download.h` as an app would: the harness writes the URL into its RAM, starts it through the
+  devhooks mailbox (`DEVHOOKS_APP_DOWNLOAD`) and reads its state over SWD. It needs the SD card and Wi-Fi. `--url URL` downloads one URL and prints the outcome;
+  `--no-wait` starts it and frees the probe for another tool (to run `st_harness.py` during a
+  download), and `--status` reads the outcome later.
 - `power_cycles.py` watches the log while you power-cycle the ST. For each boot it prints when the
   cartridge went live and whether the ST said hello (setup menu) or not (GEM). Keep power cycles
   few: every other ST boot can come from a reset through the sentinel.

@@ -20,6 +20,9 @@ jobs:
       fail-fast: false
       matrix:
         build_type: [release, debug]
+        # 1 builds HTTPS downloads in (APP_DOWNLOAD_HTTPS). Built on every pull
+        # request so the side the default build leaves out cannot rot.
+        https: [0, 1]
     steps:
     - name: Checkout the code
       uses: actions/checkout@v4
@@ -64,16 +67,17 @@ jobs:
     - name: Date the build by its commit
       run: echo "RELEASE_DATE=$(git log -1 --format=%cd --date=format:'%Y-%m-%d %H:%M:%S')" >> "$GITHUB_ENV"
 
-    - name: Build PICO_W ${{ matrix.build_type }} version
+    - name: Build PICO_W ${{ matrix.build_type }} version, HTTPS ${{ matrix.https }}
       env:
         APP_UUID: ${{ secrets.APP_UUID }}
+        APP_DOWNLOAD_HTTPS: ${{ matrix.https }}
       run: ./build.sh pico_w ${{ matrix.build_type }} ${APP_UUID:-44444444-4444-4444-8444-444444444444}
 
     # To the log as well: the job summary cannot be read back through the API.
     - name: Build report
       run: |
           {
-            echo "### ${{ matrix.build_type }}"
+            echo "### ${{ matrix.build_type }}, APP_DOWNLOAD_HTTPS=${{ matrix.https }}"
             echo '```'
             sed -n 's/^#define RELEASE_BUILD_ID "\(.*\)"$/build ID:     \1/p' rp/build/generated/build_id/build_id.h
             echo "release date: $RELEASE_DATE"

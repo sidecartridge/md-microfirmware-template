@@ -13,6 +13,7 @@ RP; flash the real one afterwards (`tools/dev/flash.sh debug`).
     python3 tools/dev/st_harness.py --oversize      # also send the oversize frame (T5)
     python3 tools/dev/st_harness.py --long          # also run the 3000 x 1 KB burst (T6)
     python3 tools/dev/st_harness.py --no-build      # reuse the last build and flash
+    python3 tools/dev/st_harness.py --no-build --no-flash --no-reboot   # run again at once
     python3 tools/dev/st_harness.py --label before  # name the report
     python3 tools/dev/st_harness.py --connect-race  # the ST's boot commands during the RP's Wi-Fi connect
 
@@ -211,12 +212,40 @@ def connect_race(elf, sent, label):
     return 0
 
 
+def reboot_st(elf, sent):
+    """Reboot the ST through the sentinel so it runs the new cartridge code, and
+    check it said hello; returns the shared variables and the boot trace."""
+    print("reboot the ST so it runs the new cartridge code")
+    boot = LogCursor()
+    write_sentinel(sent, CMD_RESET)
+    time.sleep(0.6)
+    write_sentinel(sent, CMD_NOP)
+    if not wait_st_menu(elf, 60):
+        sys.exit("the ST did not come back to the setup menu")
+    boot_trace = boot.new()
+    print("  ST back in the setup menu")
+    rc, out = run(sys.executable, os.path.join(DEV, "swd.py"), "shared", "--elf", elf, "--all")
+    svars = {int(m.group(1)): int(m.group(2), 16)
+             for m in re.finditer(r"\[\s*(\d+)\][^\n]*?0x([0-9a-f]{8})", out)}
+    set_lines = re.findall(r"Setting shared variable (\d+) to (\w+)", boot_trace)
+    print(f"  after boot: shared variable 0 = 0x{svars.get(0, 0):08x}, 1 = 0x{svars.get(1, 0):08x}; "
+          f"set by the ST during boot: {set_lines or 'nothing'}")
+    hello = "The ST has booted" in boot_trace
+    print(f"  hello from the ST during boot: {'yes' if hello else 'NO'}")
+    if not hello:
+        sys.exit("the RP never saw the ST's hello, so [F]irmware is refused")
+    return svars, set_lines, boot_trace
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--oversize", action="store_true")
     ap.add_argument("--long", action="store_true", help="also run T6, a 3000 x 1 KB burst")
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--no-flash", action="store_true", help="use what the RP runs now")
+    ap.add_argument("--no-reboot", action="store_true",
+                    help="the ST already sits in the setup menu with this cartridge code "
+                         "(after a run): start the tests at once")
     ap.add_argument("--label", default="run")
     ap.add_argument("--connect-race", action="store_true",
                     help="reboot the ST and the RP together, so the ST's boot "
@@ -237,29 +266,15 @@ def main():
         if not cur.wait(r"Start the app loop", 200):
             sys.exit("the RP did not reach its main loop")
     sent = sentinel_addr(elf)
-
-    print("reboot the ST so it runs the new cartridge code")
-    boot = LogCursor()
-    write_sentinel(sent, CMD_RESET)
-    time.sleep(0.6)
-    write_sentinel(sent, CMD_NOP)
-    if not wait_st_menu(elf, 60):
-        sys.exit("the ST did not come back to the setup menu")
-    boot_trace = boot.new()
-    print("  ST back in the setup menu")
-    rc, out = run(sys.executable, os.path.join(DEV, "swd.py"), "shared", "--elf", elf, "--all")
-    svars = {int(m.group(1)): int(m.group(2), 16)
-             for m in re.finditer(r"\[\s*(\d+)\][^\n]*?0x([0-9a-f]{8})", out)}
-    set_lines = re.findall(r"Setting shared variable (\d+) to (\w+)", boot_trace)
-    print(f"  after boot: shared variable 0 = 0x{svars.get(0, 0):08x}, 1 = 0x{svars.get(1, 0):08x}; "
-          f"set by the ST during boot: {set_lines or 'nothing'}")
-    hello = "The ST has booted" in boot_trace
-    print(f"  hello from the ST during boot: {'yes' if hello else 'NO'}")
-    if not hello:
-        sys.exit("the RP never saw the ST's hello, so [F]irmware is refused")
+    svars, set_lines, boot_trace = {}, [], ""
+    if args.no_reboot:
+        print("the ST is in the setup menu with this cartridge code already: no reboot")
+    else:
+        svars, set_lines, boot_trace = reboot_st(elf, sent)
 
     if args.connect_race:
         return connect_race(elf, sent, args.label)
+
 
     print("run the test ([F]irmware)")
     cur = LogCursor()

@@ -52,6 +52,18 @@ esac
 export BUILD_TYPE DEBUG_MODE
 echo "Build type: $BUILD_TYPE (DEBUG_MODE=$DEBUG_MODE)"
 
+# HTTPS downloads: APP_DOWNLOAD_HTTPS=1 builds TLS in (rp/src/CMakeLists.txt);
+# unset or 0 builds HTTP only.
+export APP_DOWNLOAD_HTTPS=${APP_DOWNLOAD_HTTPS:-0}
+case "$APP_DOWNLOAD_HTTPS" in
+    0|1) ;;
+    *)
+        echo "ERROR: APP_DOWNLOAD_HTTPS must be 0 or 1, not '$APP_DOWNLOAD_HTTPS'."
+        exit 1
+        ;;
+esac
+echo "HTTPS downloads: APP_DOWNLOAD_HTTPS=$APP_DOWNLOAD_HTTPS"
+
 # One date for both images, unless the caller sets one: with a fixed
 # RELEASE_DATE two builds of one commit are byte-identical.
 export RELEASE_DATE=${RELEASE_DATE:-$(date +"%Y-%m-%d %H:%M:%S")}
