@@ -284,6 +284,17 @@ add_definitions(-DDISPLAY_ATARIST)
 # We don't modify the flash in Core 1
 add_definitions(-DPICO_FLASH_ASSUME_CORE0_SAFE=1)
 
+# Core 0's stack takes all of SCRATCH_Y (4 KB) instead of the SDK's 2 KB, and
+# a guard at its bottom turns an overflow into a HardFault instead of a silent
+# walk through SCRATCH_X into the cartridge window below it. Measured on an ST
+# with the setup menu: 1,696 bytes at the deepest. PICO_HEAP_SIZE is the heap
+# the link guarantees: a build whose static data leaves less fails to link.
+# Measured: 13.1 KB of heap at the peak after boot and the menu commands.
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    PICO_STACK_SIZE=0x1000
+    PICO_USE_STACK_GUARDS=1
+    PICO_HEAP_SIZE=0x8000)
+
 # Select HTTPS or HTTP downloads of the firmware
 add_definitions(-DAPP_DOWNLOAD_HTTPS=0)
 
