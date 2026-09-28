@@ -207,6 +207,15 @@ if(APP_DOWNLOAD_HTTPS)
     target_link_options(${PROJECT_NAME} PRIVATE
         "-Wl,--defsym=__core0_stack_takes_scratch_x=1")
     target_sources(${PROJECT_NAME} PRIVATE mbedtls_ms_time.c)
+    # mbedTLS itself is compiled -Os whatever the build type. At -O3 (CMake
+    # Release) every TLS download failed: the server closed the connection
+    # about 0.5 s into the handshake. Bisected on the device to
+    # library/gcm.c (AES-GCM, the suite servers pick) alone; the whole library
+    # stays at -Os, the configuration Booster ships and every test host passed
+    # with. TLS speed is set by the network, not by this.
+    file(GLOB MBEDTLS_LIBRARY_SOURCES ${PICO_SDK_PATH}/lib/mbedtls/library/*.c)
+    set_source_files_properties(${MBEDTLS_LIBRARY_SOURCES}
+        PROPERTIES COMPILE_OPTIONS "-Os")
     target_link_libraries(${PROJECT_NAME} PRIVATE
         pico_lwip_mbedtls    # lwIP's ALTCP-over-mbedTLS layer
         pico_mbedtls)        # mbedTLS
