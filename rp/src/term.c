@@ -547,14 +547,17 @@ void term_init(void) {
 // Invoke this function to process the commands from the active loop in the
 // main function
 void __not_in_flash_func(term_loop)() {
-  TransmissionProtocol protocolSnapshot = {0};
+  // Read the published slot in place: a copy cost over 4 KB of stack, twice
+  // the stack core 0 has. The double buffer keeps term_command_cb off this
+  // slot until the next command after it, and everything is read from the
+  // slot before termInputChar(), which can run a command handler that drains
+  // commands again.
+  const TransmissionProtocol *snapshot = NULL;
   bool protocolReady = false;
   uint32_t overwriteCountSnapshot = 0;
 
-  // Snapshot the latest published slot. Producer and consumer are both
-  // on core 0 and never re-enter, so no critical section is needed.
   if (protocolBufferReady) {
-    protocolSnapshot = protocolBuffers[protocolReadIndex];
+    snapshot = &protocolBuffers[protocolReadIndex];
     protocolBufferReady = false;
     protocolReady = true;
   }
@@ -564,14 +567,14 @@ void __not_in_flash_func(term_loop)() {
     // Shared by all commands
     // Read the random token from the command and increment the payload
     // pointer to the first parameter available in the payload
-    uint32_t randomToken = TPROTO_GET_RANDOM_TOKEN(protocolSnapshot.payload);
-    uint16_t *payloadPtr = ((uint16_t *)(protocolSnapshot).payload);
-    uint16_t commandId = protocolSnapshot.command_id;
+    uint32_t randomToken = TPROTO_GET_RANDOM_TOKEN(snapshot->payload);
+    uint16_t *payloadPtr = ((uint16_t *)snapshot->payload);
+    uint16_t commandId = snapshot->command_id;
     DPRINTF(
         "Command ID: %d. Size: %d. Random token: 0x%08X, Checksum: 0x%04X, "
         "Overwrites: %lu\n",
-        protocolSnapshot.command_id, protocolSnapshot.payload_size, randomToken,
-        protocolSnapshot.final_checksum, (unsigned long)overwriteCountSnapshot);
+        snapshot->command_id, snapshot->payload_size, randomToken,
+        snapshot->final_checksum, (unsigned long)overwriteCountSnapshot);
 
 #if defined(_DEBUG) && (_DEBUG != 0)
     // Jump the random token
@@ -579,33 +582,33 @@ void __not_in_flash_func(term_loop)() {
 
     // Read the payload parameters
     uint16_t payloadSizeTmp = 4;
-    if ((protocolSnapshot.payload_size > payloadSizeTmp) &&
-        (protocolSnapshot.payload_size <= TERM_PARAMETERS_MAX_SIZE)) {
+    if ((snapshot->payload_size > payloadSizeTmp) &&
+        (snapshot->payload_size <= TERM_PARAMETERS_MAX_SIZE)) {
       DPRINTF("Payload D3: 0x%04X\n", TPROTO_GET_PAYLOAD_PARAM32(payloadPtr));
       TPROTO_NEXT32_PAYLOAD_PTR(payloadPtr);
     }
     payloadSizeTmp += 4;
-    if ((protocolSnapshot.payload_size > payloadSizeTmp) &&
-        (protocolSnapshot.payload_size <= TERM_PARAMETERS_MAX_SIZE)) {
+    if ((snapshot->payload_size > payloadSizeTmp) &&
+        (snapshot->payload_size <= TERM_PARAMETERS_MAX_SIZE)) {
       DPRINTF("Payload D4: 0x%04X\n", TPROTO_GET_PAYLOAD_PARAM32(payloadPtr));
       TPROTO_NEXT32_PAYLOAD_PTR(payloadPtr);
     }
     payloadSizeTmp += 4;
-    if ((protocolSnapshot.payload_size > payloadSizeTmp) &&
-        (protocolSnapshot.payload_size <= TERM_PARAMETERS_MAX_SIZE)) {
+    if ((snapshot->payload_size > payloadSizeTmp) &&
+        (snapshot->payload_size <= TERM_PARAMETERS_MAX_SIZE)) {
       DPRINTF("Payload D5: 0x%04X\n", TPROTO_GET_PAYLOAD_PARAM32(payloadPtr));
       TPROTO_NEXT32_PAYLOAD_PTR(payloadPtr);
     }
     payloadSizeTmp += 4;
-    if ((protocolSnapshot.payload_size > payloadSizeTmp) &&
-        (protocolSnapshot.payload_size <= TERM_PARAMETERS_MAX_SIZE)) {
+    if ((snapshot->payload_size > payloadSizeTmp) &&
+        (snapshot->payload_size <= TERM_PARAMETERS_MAX_SIZE)) {
       DPRINTF("Payload D6: 0x%04X\n", TPROTO_GET_PAYLOAD_PARAM32(payloadPtr));
       TPROTO_NEXT32_PAYLOAD_PTR(payloadPtr);
     }
 #endif
 
     // Handle the command
-    switch (protocolSnapshot.command_id) {
+    switch (snapshot->command_id) {
       case APP_TERMINAL_START: {
         display_termStart(DISPLAY_TILES_WIDTH, DISPLAY_TILES_HEIGHT);
         term_clearScreen();
@@ -615,7 +618,7 @@ void __not_in_flash_func(term_loop)() {
         DPRINTF("Send command to display: DISPLAY_COMMAND_TERM\n");
       } break;
       case APP_TERMINAL_KEYSTROKE: {
-        uint16_t *payload = ((uint16_t *)(protocolSnapshot).payload);
+        uint16_t *payload = ((uint16_t *)snapshot->payload);
         // Jump the random token
         TPROTO_NEXT32_PAYLOAD_PTR(payload);
         // Extract the 32 bit payload
@@ -666,25 +669,35 @@ static void termPrintMenuLine(const char *fmt, ...) {
 }
 
 void term_printNetworkInfo(void) {
-  char hostName[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char ipAddress[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char gateway[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char dns1[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char dns2[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char netmask[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char ssid[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char bssid[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char authMode[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char signalDb[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char wifiMode[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char wifiLink[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char ipMode[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char wifiMac[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char mcuArch[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char mcuId[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char selectState[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char sdStatus[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char sdSpace[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
+  // Static, not on the stack: nineteen values would take more than half of
+  // core 0's stack. The menu runs on core 0 only and never re-enters; the
+  // values are cleared on every call, as they were as locals.
+  static char hostName[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char ipAddress[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char gateway[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char dns1[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char dns2[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char netmask[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char ssid[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char bssid[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char authMode[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char signalDb[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char wifiMode[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char wifiLink[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char ipMode[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char wifiMac[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char mcuArch[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char mcuId[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char selectState[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char sdStatus[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char sdSpace[TERM_NETWORK_INFO_VALUE_SIZE];
+  char *const values[] = {hostName, ipAddress,   gateway,  dns1,     dns2,
+                          netmask,  ssid,        bssid,    authMode, signalDb,
+                          wifiMode, wifiLink,    ipMode,   wifiMac,  mcuArch,
+                          mcuId,    selectState, sdStatus, sdSpace};
+  for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
+    memset(values[i], 0, TERM_NETWORK_INFO_VALUE_SIZE);
+  }
 
   term_getConfigValueOrNA(PARAM_HOSTNAME, hostName, sizeof(hostName));
   term_getConfigValueOrNA(PARAM_WIFI_IP, ipAddress, sizeof(ipAddress));
@@ -888,11 +901,13 @@ static bool term_buildLiveMenuLines(char *ssidLine, size_t ssidLineSize,
     return false;
   }
 
-  char ssid[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char signalDb[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char selectState[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char sdStatus[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
-  char sdSpace[TERM_NETWORK_INFO_VALUE_SIZE] = {0};
+  // Static, not on the stack, like the menu's own values; each one is
+  // written below before it is read.
+  static char ssid[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char signalDb[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char selectState[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char sdStatus[TERM_NETWORK_INFO_VALUE_SIZE];
+  static char sdSpace[TERM_NETWORK_INFO_VALUE_SIZE];
 
   snprintf(ssid, sizeof(ssid), "N/A");
   snprintf(signalDb, sizeof(signalDb), "N/A");
@@ -942,9 +957,12 @@ void term_refreshMenuLiveInfo(void) {
   static char prevSelectLine[TERM_MENU_LIVE_LINE_MAX] = {0};
   static char prevSdLine[TERM_MENU_LIVE_LINE_MAX] = {0};
 
-  char ssidLine[TERM_MENU_LIVE_LINE_MAX] = {0};
-  char selectLine[TERM_MENU_LIVE_LINE_MAX] = {0};
-  char sdLine[TERM_MENU_LIVE_LINE_MAX] = {0};
+  // Static, not on the stack (together almost a kilobyte): the three lines
+  // are written in full before they are read, and the update is built from
+  // offset 0 with snprintf, which terminates it.
+  static char ssidLine[TERM_MENU_LIVE_LINE_MAX];
+  static char selectLine[TERM_MENU_LIVE_LINE_MAX];
+  static char sdLine[TERM_MENU_LIVE_LINE_MAX];
 
   if (!menuRowsValid ||
       !term_buildLiveMenuLines(ssidLine, sizeof(ssidLine), selectLine,
@@ -960,7 +978,7 @@ void term_refreshMenuLiveInfo(void) {
     return;
   }
 
-  char updateBuffer[512] = {0};
+  static char updateBuffer[512];
   size_t offset = 0;
 
   if (updateSsid) {
