@@ -79,6 +79,13 @@ repeatable (its `README.md` has the full command list):
   with OpenOCD's own `program`: halting the cores does not stop the RP2040's DMA, and while the ST
   touches the cartridge the ROM3 capture ring writes bus samples into the RAM the flash write is
   staged in. `swd.py program` stops every PIO state machine and DMA channel first.
+- Three harnesses turn those tools into PASS/FAIL checks, each with a JSON report in
+  `tools/dev/logs/`. `tools_harness.py` checks every tool against a debug build.
+  `st_harness.py` runs `sttest.s` in place of `userfw.s` and tests the command path from the ST's
+  side: the handover, the senders' flags and kept registers, bursts of small and 1 KB commands, an
+  oversize frame, a long burst. `power_cycles.py` counts cold boots that reach the setup menu.
+  Power-cycle the ST sparingly; reset it through the sentinel for everything else (the harnesses
+  do).
 
 ### Planning backlog (`docs/`)
 `docs/epics/` holds the local planning notes (`cockpit.sh` regenerates `STATUS.md`; `ITERATIONS.md`

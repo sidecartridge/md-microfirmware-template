@@ -214,6 +214,41 @@ from `$PICO_OPENOCD_PATH`, the variable `.vscode/launch.json` uses. A command th
 momentary debug-port drop (common while the firmware changes its clock early in boot) is retried.
 Close a VS Code debug session first: only one program can use the probe.
 
+## Hardware harnesses
+
+Scripts that run a set of checks on the device and print PASS or FAIL for each. All need the
+Debug Probe and `console.py watch` running (they read its log, never the UART); each writes a JSON
+report to `logs/` and exits 0 only when every check passes.
+
+```bash
+python3 tools/dev/tools_harness.py --build --flash --reset   # every tool above, against the device
+python3 tools/dev/st_harness.py --oversize --long            # the command path, from the ST's side
+python3 tools/dev/power_cycles.py                            # cold boots: menu or GEM? (3 by default)
+```
+
+- `tools_harness.py` checks the tools themselves on a debug build: the running firmware and its
+  build ID, the console, `screen` / `text` / `shared`, the mailbox commands (`key`, `inject`,
+  `app heap_hold`), `counters`, `ring`, a SELECT press (which restarts the RP), `crash` and
+  `postmortem`. `--build` also builds both types and checks their flags and symbols, `--flash`
+  flashes the debug build first, and `--reset` restarts the RP at the end.
+- `st_harness.py` tests the command path from the ST's side. It copies the tree to
+  `builds/sttree`, puts `sttest.s` in place of `userfw.s`, builds and flashes that debug firmware,
+  resets the ST through the sentinel so it runs the new cartridge code, and starts the tests with
+  `[F]irmware`. The ST reports each result as a `$7Fxx` command, which the setup terminal logs:
+  - T0: the return address into TOS the cartridge hands over.
+  - T1: `d0 = 0` with Z set after each sender.
+  - T2: the registers each send keeps.
+  - T3 and T4: 100 small commands and 10 of 1 KB, none failed.
+  - T5 (`--oversize`): an oversize frame, then a command that must still be answered.
+  - T6 (`--long`): a burst of 3,000 commands of 1 KB, about 7 s.
+
+  `--connect-race` instead resets the ST and the RP together, and times the ST's boot commands
+  against the RP's Wi-Fi connect. The test firmware stays on the RP, so flash the real one
+  afterwards. The working tree is never touched.
+- `power_cycles.py` watches the log while you power-cycle the ST. For each boot it prints when the
+  cartridge went live and whether the ST said hello (setup menu) or not (GEM). Keep power cycles
+  few: every other ST boot can come from a reset through the sentinel.
+
 ## Measuring builds
 
 - `measure_builds.sh` builds each build type out of tree with `-fstack-usage` and
