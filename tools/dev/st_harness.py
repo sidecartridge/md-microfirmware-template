@@ -16,11 +16,15 @@ RP; flash the real one afterwards (`tools/dev/flash.sh debug`).
     python3 tools/dev/st_harness.py --no-build --no-flash --no-reboot   # run again at once
     python3 tools/dev/st_harness.py --label before  # name the report
     python3 tools/dev/st_harness.py --connect-race  # the ST's boot commands during the RP's Wi-Fi connect
+    python3 tools/dev/st_harness.py --mste 16c      # a Mega STE at 16 MHz with the cache for the run
 
 The tests: T0 what the cartridge hands over (the return address into TOS, the
 machine), T1 the flags each sender returns with, T2 the registers each send
 changes, T3 100 small commands, T4 10 commands of 1 KB, T5 an oversize frame
-and then an ordinary command, T6 a long burst of 1 KB commands. Exits 0 when
+and then an ordinary command, T6 a long burst of 1 KB commands. On a Mega STE
+T0 also reports the speed and cache at the handover, which must be the user's
+setting; --mste sets them for the run (8, 16 or 16c), as the user would, and
+the ST's closing reboot keeps whatever the reset leaves. Exits 0 when
 every check passes. Writes tools/dev/logs/st-harness-<label>-<time>.json.
 """
 
@@ -79,7 +83,15 @@ class LogCursor:
         return False
 
 
-def build(oversize, long_burst=False):
+MSTE_SETTINGS = {"8": 0, "16": 2, "16c": 3}   # $FFFF8E21: bit 1 16 MHz, bit 0 the cache
+
+
+def mste_setting(reg):
+    # Only bits 1-0 are the register; the rest read back as whatever the bus held.
+    return f"{'16' if reg & 2 else '8'} MHz, cache {'on' if reg & 1 else 'off'}"
+
+
+def build(oversize, long_burst=False, mste=-1):
     print("build: temporary tree with sttest.s as userfw.s")
     if os.path.exists(TREE):
         shutil.rmtree(TREE)
@@ -95,7 +107,8 @@ def build(oversize, long_burst=False):
     src = open(os.path.join(HERE, "sttest.s")).read()
     with open(os.path.join(TREE, "target", "atarist", "src", "userfw.s"), "w") as f:
         f.write(f"STTEST_OVERSIZE equ {1 if oversize else 0}\n"
-                f"STTEST_LONG equ {1 if long_burst else 0}\n" + src)
+                f"STTEST_LONG equ {1 if long_burst else 0}\n"
+                f"STTEST_MSTE equ {mste}\n" + src)
     at = os.path.join(TREE, "target", "atarist")
     env = dict(os.environ, STCMD_NO_TTY="1")
     rc, out = run("./build.sh", at, "release", cwd=at, env=env)
@@ -246,6 +259,8 @@ def main():
     ap.add_argument("--no-reboot", action="store_true",
                     help="the ST already sits in the setup menu with this cartridge code "
                          "(after a run): start the tests at once")
+    ap.add_argument("--mste", choices=sorted(MSTE_SETTINGS),
+                    help="on a Mega STE, the speed and cache for the run (with the build)")
     ap.add_argument("--label", default="run")
     ap.add_argument("--connect-race", action="store_true",
                     help="reboot the ST and the RP together, so the ST's boot "
@@ -253,7 +268,7 @@ def main():
     args = ap.parse_args()
 
     if not args.no_build:
-        build(args.oversize, args.long)
+        build(args.oversize, args.long, MSTE_SETTINGS.get(args.mste, -1))
     elf = elf_path()
 
     if not args.no_flash:
@@ -316,6 +331,16 @@ def main():
     if 0x7F00 in rep:
         mch, tos, lf = (val(0x7F00, i, 0) for i in range(3))
         print(f"        T0 machine: _MCH 0x{mch:08x}, TOS {tos >> 8:x}.{tos & 0xff:02x}, _longframe {lf}")
+        if mch == 0x00010010:  # a Mega STE: its speed and cache register
+            print(f"        T0 Mega STE at the handover: {mste_setting(val(0x7F10, 2, 0))}")
+            run_reg = val(0x7F7F, 1)
+            if run_reg is not None:
+                print(f"        Mega STE for the run: {mste_setting(run_reg)}")
+            if args.mste:
+                want = MSTE_SETTINGS[args.mste]
+                check(f"the run's Mega STE setting is --mste {args.mste}",
+                      run_reg is not None and run_reg & 3 == want,
+                      mste_setting(run_reg) if run_reg is not None else "no report")
     for cid, name in ((0x7F02, "send_sync"), (0x7F04, "send_write_sync")):
         d0, sr = val(cid, 0), val(cid, 1, 0)
         z = sr >> 2 & 1
