@@ -688,8 +688,8 @@ Example of the code that implemens the high level commands of the terminal. It a
 The memory mapping of the Multi-device board is defined in the file `rp/src/memmap_rp.ld` and it performs significant changes to the standard memory mapping of a RP2040 application. The memory mapping of the Multi-device board is:
 - FLASH: Reduced from the 2MBytes found in the Raspberry Pi Pico W boards to 1024Kbytes for the active microfirmware app.
 - RAM: Reduced from the 264KBytes found in the Raspberry Pi Pico W boards to **192Kbytes** (origin `0x20000000`, length `192K`).
-- SCRATCH_X: No changes. Core 1's stack; the template never starts core 1.
-- SCRATCH_Y: Core 0's stack, all 4Kbytes (`PICO_STACK_SIZE`), with an MPU guard on its bottom 32 bytes: an overflow is a HardFault instead of silent damage.
+- SCRATCH_X: No changes. Core 1's stack; the template never starts core 1. A build with HTTPS downloads (`APP_DOWNLOAD_HTTPS=1`) gives it to core 0's stack instead, since a TLS handshake came too close to 4Kbytes.
+- SCRATCH_Y: Core 0's stack, all 4Kbytes (`PICO_STACK_SIZE`), with an MPU guard on its bottom 32 bytes: an overflow is a HardFault instead of silent damage. With HTTPS the stack runs on through SCRATCH_X, 8Kbytes, and the guard sits at the bottom of SCRATCH_X.
 - CONFIG_FLASH: FLASH memory reserved for the configuration parameters of the Multi-device board. 4Kbytes.
 - ROM_IN_RAM: RAM memory reserved for the cartridge ROM4 image. **64Kbytes** at `0x20030000`. This is exactly one cartridge ROM bank; the second 64 KB bank is no longer mirrored to RAM since ROM3 is now used as a command channel rather than a data bank.
 

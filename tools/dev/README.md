@@ -205,9 +205,9 @@ catches short-lived allocations between samples. A shortage shows as a peak with
 before the stack, or as plenty of free bytes but a small largest block (fragmentation). `--watch
 SECONDS` samples until Ctrl-C; `--csv FILE` appends every sample for later comparison. If the
 heap changes while it is read, the chunk walk is retried once and otherwise reported as failed.
-In this template the heap's limit, `__StackLimit`, lies past the end of the 64 KB cartridge window
-(`rp/src/memmap_rp.ld`), so the size `heap` reports includes the window: an arena that grows into
-it is overwriting the cartridge image the ST is reading.
+In this template the heap's limit, `__StackLimit`, is the end of `RAM`, where the 64 KB cartridge
+window starts (`rp/src/memmap_rp.ld`), so the size `heap` reports stops short of the window and a
+request that does not fit gets NULL.
 
 OpenOCD is `$OPENOCD`, `openocd` on `PATH`, or `../pico/openocd/src/openocd`; its scripts come
 from `$PICO_OPENOCD_PATH`, the variable `.vscode/launch.json` uses. A command that fails on a
@@ -236,12 +236,18 @@ python3 tools/dev/download_harness.py                        # real downloads, c
   `builds/sttree`, puts `sttest.s` in place of `userfw.s`, builds and flashes that debug firmware,
   resets the ST through the sentinel so it runs the new cartridge code, and starts the tests with
   `[F]irmware`. The ST reports each result as a `$7Fxx` command, which the setup terminal logs:
-  - T0: the return address into TOS the cartridge hands over.
+  - T0: the return address into TOS the cartridge hands over, the machine and TOS, and on a
+    Mega STE its speed and cache at the handover, which must be the user's setting.
   - T1: `d0 = 0` with Z set after each sender.
   - T2: the registers each send keeps.
   - T3 and T4: 100 small commands and 10 of 1 KB, none failed.
   - T5 (`--oversize`): an oversize frame, then a command that must still be answered.
   - T6 (`--long`): a burst of 3,000 commands of 1 KB, about 7 s.
+
+  On a Mega STE `--mste 8|16|16c` sets the speed and cache for the run, as a user would (the
+  test program turns the cache off around its sends, as any user firmware must, and puts the
+  setting back before its closing reboot). A reset brings the machine back to 8 MHz with no
+  cache, so the next handover reads that.
 
   `--connect-race` instead resets the ST and the RP together, and times the ST's boot commands
   against the RP's Wi-Fi connect. `--no-build --no-flash --no-reboot` runs the tests again at once

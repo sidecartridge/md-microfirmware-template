@@ -8,7 +8,9 @@
 ;
 ; Runs from cartridge ROM at $FA0800, so everything is PC-relative.
 ; Set by the harness, in front of this file: STTEST_OVERSIZE 1 also sends an
-; oversize frame (T5), STTEST_LONG 1 also runs the long burst (T6).
+; oversize frame (T5), STTEST_LONG 1 also runs the long burst (T6), and on a
+; Mega STE STTEST_MSTE sets the speed and cache for the run (bit 1 16 MHz,
+; bit 0 the cache; -1 leaves them as they are).
 
     include inc/sidecart_layout.s
     include inc/sidecart_macros.s
@@ -31,10 +33,32 @@ REPORT      macro
 
 sttest:
 ; T0: what the cartridge handed over: the top of the stack must be the return
-; address into TOS (whatever main.s pushed has been taken off), and the machine
+; address into TOS (whatever main.s pushed has been taken off), and the machine.
+; On a Mega STE, d5 takes the speed and cache register as handed over, which
+; must be the user's setting (main.s puts it back before jmp USERFW). Then the
+; run's setting, as a user would choose it, and like any user firmware the
+; cache goes off for the sends (with it on they never reach the RP) and comes
+; back before the reboot.
     move.l (sp), d3
     move.l sp, d4
     moveq #0, d5
+    cmp.l #COOKIE_JAR_MEGASTE, HARDWARE_TYPE_ADDR
+    bne.s .handover_taken
+    move.b MEGASTE_SPEED_CACHE_REG.w, d5
+    ifge STTEST_MSTE
+    bclr #0, MEGASTE_SPEED_CACHE_REG.w  ; the speed first: 8 MHz with the cache is no mode
+    ifne STTEST_MSTE&2
+    bset #1, MEGASTE_SPEED_CACHE_REG.w
+    else
+    bclr #1, MEGASTE_SPEED_CACHE_REG.w
+    endif
+    ifne STTEST_MSTE&1
+    bset #0, MEGASTE_SPEED_CACHE_REG.w
+    endif
+    endif
+.handover_taken:
+    clr.w -(sp)                         ; the run's setting, kept by megaste_cache_off
+    megaste_cache_off (sp)
     REPORT $7F10
     bsr find_mch                        ; d3 = _MCH cookie, 0 when there is none
     move.l _sysbase.w, a0
@@ -173,8 +197,11 @@ sttest:
 ; Done. Give the RP time to log, then reboot the ST as main.s does.
     move.l #$600D, d3
     moveq #0, d4
+    move.b (sp), d4                     ; the run's Mega STE setting
     moveq #0, d5
     REPORT $7F7F
+    megaste_cache_back (sp)
+    addq.l #2, sp
     move.l _hz_200.w, d0
     add.l #200, d0                      ; one second
 .linger:
