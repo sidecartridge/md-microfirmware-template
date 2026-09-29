@@ -3,7 +3,6 @@
 static bool cyw43Initialized = false;
 static wifi_mode_t wifiCurrentMode = WIFI_MODE_STA;
 static wifi_network_info_t wifiNetworkInfo = {.rssi = INT16_MIN};
-static wifi_scan_data_t wifiScanData = {0};
 static bool wifiScanInProgress = false;
 static char wifiHostname[NETWORK_MAX_STRING_LENGTH];
 static ip_addr_t currentIp = {0};
@@ -42,6 +41,24 @@ static void network_resetRuntimeState(void) {
   mdnsInitialized = false;
   mdnsStaRegistered = false;
 #endif
+}
+
+// The power mode network_wifiInit() configured from PARAM_WIFI_POWER. Every
+// connect resets the STA interface (network_resetStaInterface), and enabling
+// it again makes the driver apply CYW43_DEFAULT_PM, a power-save mode,
+// whatever was configured: measured on a Pico W, 0 (no power save) became
+// 0x00a11142. So the mode is applied again after every reset, and read back.
+static uint32_t wifiPmConfigured = NETWORK_POWER_MGMT_DISABLED;
+
+static void network_applyPowerMode(void) {
+  cyw43_wifi_pm(&cyw43_state, wifiPmConfigured);
+  uint32_t pm = 0;
+  if (cyw43_wifi_get_pm(&cyw43_state, &pm) == 0) {
+    DPRINTF("WiFi power mode: asked for %08lx, the radio reports %08lx\n",
+            (unsigned long)wifiPmConfigured, (unsigned long)pm);
+  } else {
+    DPRINTF("WiFi power mode: could not read it back\n");
+  }
 }
 
 static void network_resetStaInterface(struct netif *nif) {
@@ -116,6 +133,99 @@ static char *network_trim_ascii_spaces(char *text) {
     text[--len] = '\0';
   }
   return text;
+}
+
+// A static TCP/IP configuration is validated before the interface is touched.
+// The address, netmask and gateway used to go straight from
+// settings_find_entry(...)->value, with no NULL check, into ipaddr_addr(),
+// which also accepts "10" and "1.2": a missing setting faulted before the
+// setup menu, where it would be fixed, came up. Anything missing or malformed
+// now leaves DHCP running and says why.
+static bool staticConfigRejected = false;
+static char staticConfigReason[40] = "";
+
+bool network_getStaticConfigRejected(const char **reason) {
+  if (reason != NULL) {
+    *reason = staticConfigReason;
+  }
+  return staticConfigRejected;
+}
+
+static void network_rejectStaticConfig(const char *reason) {
+  staticConfigRejected = true;
+  snprintf(staticConfigReason, sizeof(staticConfigReason), "%s", reason);
+  DPRINTF("Static IP rejected (%s); falling back to DHCP\n", reason);
+}
+
+// Four decimal octets and nothing else.
+static bool network_parseDottedQuad(const char *text, ip_addr_t *out) {
+  if (text == NULL) {
+    return false;
+  }
+  uint32_t octets[4] = {0};
+  int count = 0;
+  const char *p = text;
+  while (*p != '\0' && count < 4) {
+    if (*p < '0' || *p > '9') {
+      return false;
+    }
+    uint32_t value = 0;
+    int digits = 0;
+    while (*p >= '0' && *p <= '9') {
+      value = (value * 10u) + (uint32_t)(*p - '0');
+      digits++;
+      if (digits > 3 || value > 255u) {
+        return false;
+      }
+      p++;
+    }
+    octets[count++] = value;
+    if (*p == '.') {
+      p++;
+      if (*p == '\0') {
+        return false;  // trailing dot
+      }
+    } else if (*p != '\0') {
+      return false;
+    }
+  }
+  if (count != 4 || *p != '\0') {
+    return false;
+  }
+  IP4_ADDR(out, octets[0], octets[1], octets[2], octets[3]);
+  return true;
+}
+
+// Reads one setting as a dotted quad. Returns false, with the reason already
+// reported, when the key is missing, empty or malformed.
+static bool network_readDottedQuad(const char *key, const char *what,
+                                   ip_addr_t *out) {
+  SettingsConfigEntry *entry = settings_find_entry(gconfig_getContext(), key);
+  if (entry == NULL || entry->value[0] == '\0') {
+    char reason[40];
+    snprintf(reason, sizeof(reason), "no %s", what);
+    network_rejectStaticConfig(reason);
+    return false;
+  }
+  char buf[NETWORK_MAX_STRING_LENGTH];
+  snprintf(buf, sizeof(buf), "%s", entry->value);
+  if (!network_parseDottedQuad(network_trim_ascii_spaces(buf), out)) {
+    char reason[40];
+    snprintf(reason, sizeof(reason), "bad %s", what);
+    network_rejectStaticConfig(reason);
+    return false;
+  }
+  return true;
+}
+
+// A netmask has to be a run of ones followed by a run of zeros.
+static bool network_netmaskIsContiguous(const ip_addr_t *mask) {
+  uint32_t host = lwip_ntohl(ip4_addr_get_u32(ip_2_ip4(mask)));
+  if (host == 0u) {
+    return false;
+  }
+  uint32_t inverted = ~host;
+  return (inverted & (inverted + 1u)) == 0u;
 }
 
 static uint32_t getCountryCode(char *code, char **validCountryStr) {
@@ -423,7 +533,7 @@ int network_wifiInit(wifi_mode_t mode) {
     DPRINTF("SSID: %s\n", ssidStr);
 
     char passwordStr[WIFI_AP_PASS_MAX_LENGTH] = WIFI_AP_PASS;
-    DPRINTF("Password: %s\n", passwordStr);
+    DPRINTF("Password: %s\n", (passwordStr[0] != '\0') ? "<set>" : "<none>");
 
     int authInt = WIFI_AP_AUTH;  // WPA2_AES_PSK
 
@@ -481,7 +591,8 @@ int network_wifiInit(wifi_mode_t mode) {
     }
   }
   DPRINTF("Setting power management to: %08x\n", pmValue);
-  cyw43_wifi_pm(&cyw43_state, pmValue);
+  wifiPmConfigured = pmValue;
+  network_applyPowerMode();
   return 0;
 }
 #endif
@@ -500,107 +611,9 @@ void network_safePoll() {
   }
 }
 
-/**
- * @brief Scans for available Wi-Fi networks and stores the results.
- *
- * This function initiates a Wi-Fi network scan if the network is initialized
- * and the scan interval has elapsed. It processes the scan results and stores
- * unique networks in the global `wifi_scan_data` structure.
- *
- * @param wifi_scan_time Pointer to the absolute time of the last scan.
- * @param wifi_scan_interval Interval between scans in seconds.
- * @return int Returns 0 on success, -1 if the network is not initialized.
- */
-int network_scan(absolute_time_t *wifiScanTime, int wifiScanInterval) {
-  if (!cyw43Initialized) {
-    // If the network is not initialized, we cancel the scan
-    return -1;
-  }
-  int scan_result(void *env, const cyw43_ev_scan_result_t *result) {
-    // Check if the BSSID already exists in the found networks
-    bool bssid_exists(wifi_network_info_t * network) {
-      for (size_t i = 0; i < wifiScanData.count; i++) {
-        if (strcmp(wifiScanData.networks[i].bssid, network->bssid) == 0) {
-          return true;  // BSSID found
-        }
-      }
-      return false;  // BSSID not found
-    }
-    if (result && wifiScanData.count < MAX_NETWORKS) {
-      wifi_network_info_t network;
-
-      // Copy SSID
-      snprintf(network.ssid, sizeof(network.ssid), "%s", result->ssid);
-
-      // Format BSSID
-      snprintf(network.bssid, sizeof(network.bssid),
-               "%02x:%02x:%02x:%02x:%02x:%02x", result->bssid[0],
-               result->bssid[1], result->bssid[2], result->bssid[3],
-               result->bssid[4], result->bssid[5]);
-
-      // Store authentication mode
-      network.auth_mode = result->auth_mode;
-
-      // Store signal strength
-      network.rssi = result->rssi;
-
-      // Check if BSSID already exists
-      if (!bssid_exists(&network)) {
-        if (strlen(network.ssid) > 0) {
-          wifiScanData.networks[wifiScanData.count] = network;
-          wifiScanData.count++;
-          DPRINTF("FOUND NETWORK %s (%s) with auth %d and RSSI %d\n",
-                  network.ssid, network.bssid, network.auth_mode, network.rssi);
-        }
-      }
-    }
-    return 0;
-  }
-  // DPRINTF("Time diff: %lld\n", absolute_time_diff_us(get_absolute_time(),
-  // (absolute_time_t)*wifi_scan_time));
-  if (absolute_time_diff_us(get_absolute_time(), *wifiScanTime) < 0) {
-    if (!wifiScanInProgress) {
-      DPRINTF("Scanning networks...\n");
-      cyw43_wifi_scan_options_t scanOptions = {0};
-      int err = cyw43_wifi_scan(&cyw43_state, &scanOptions, NULL, scan_result);
-      if (err == 0) {
-        DPRINTF("Performing wifi scan\n");
-        wifiScanInProgress = true;
-      } else {
-        DPRINTF("Failed to start scan: %d\n", err);
-        *wifiScanTime = make_timeout_time_ms(wifiScanInterval * SEC_TO_MS);
-      }
-    } else {
-      if (!cyw43_wifi_scan_active(&cyw43_state)) {
-        DPRINTF("Continue scanning...\n");
-        wifiScanInProgress = false;
-      }
-      *wifiScanTime = make_timeout_time_ms(wifiScanInterval * SEC_TO_MS);
-    }
-  }
-  // else {
-  //     DPRINTF("Scan already in progress\n");
-  // }
-}
-
-int network_scanIsActive() {
-  if (!cyw43Initialized) {
-    // If the network is not initialized, we cancel the scan
-    DPRINTF("WiFi not initialized.\n");
-    return -1;
-  }
-  return (int)cyw43_wifi_scan_active(&cyw43_state);
-}
-
-/**
- * @brief Return the list of found networks.
- *
- * This function returns a pointer to the list of Wi-Fi networks that have been
- * found during a scan.
- *
- * @return wifi_scan_data_t* Pointer to the list of found Wi-Fi networks.
- */
-wifi_scan_data_t *network_getFoundNetworks() { return &wifiScanData; }
+// Wi-Fi scanning and configuration belong to Booster; an app only reads the
+// settings Booster writes. The scan path that stood here was never called,
+// and its callbacks were GCC nested functions, which clang cannot parse.
 
 static void wifiLinkCallback(struct netif *netif) {
   DPRINTF("WiFi Link: %s\n", (netif_is_link_up(netif) ? "UP" : "DOWN"));
@@ -673,6 +686,7 @@ wifi_sta_conn_process_status_t network_wifiStaConnect() {
   // connect attempt (mDNS service, stale IP/status).
   struct netif *nif = &cyw43_state.netif[CYW43_ITF_STA];
   network_resetStaInterface(nif);
+  network_applyPowerMode();  // the reset just put the driver's default back
 
   // Hostname is optional; PARAM_HOSTNAME may be missing entirely.
   SettingsConfigEntry *hostnameEntry =
@@ -730,16 +744,39 @@ wifi_sta_conn_process_status_t network_wifiStaConnect() {
     DPRINTF("DHCP enabled\n");
   } else {
     DPRINTF("Static IP enabled\n");
-    dhcp_stop(nif);
+    // Validate everything before touching the interface, so a bad setting
+    // leaves DHCP running instead of half-applying a broken configuration.
     ip_addr_t ipaddr;
     ip_addr_t netmask;
     ip_addr_t gwy;
-    ipaddr.addr = ipaddr_addr(
-        settings_find_entry(gconfig_getContext(), PARAM_WIFI_IP)->value);
-    netmask.addr = ipaddr_addr(
-        settings_find_entry(gconfig_getContext(), PARAM_WIFI_NETMASK)->value);
-    gwy.addr = ipaddr_addr(
-        settings_find_entry(gconfig_getContext(), PARAM_WIFI_GATEWAY)->value);
+    bool ok = network_readDottedQuad(PARAM_WIFI_IP, "IP", &ipaddr) &&
+              network_readDottedQuad(PARAM_WIFI_NETMASK, "netmask", &netmask) &&
+              network_readDottedQuad(PARAM_WIFI_GATEWAY, "gateway", &gwy);
+    if (ok && !network_netmaskIsContiguous(&netmask)) {
+      network_rejectStaticConfig("bad netmask");
+      ok = false;
+    }
+    if (ok) {
+      uint32_t host = lwip_ntohl(ip4_addr_get_u32(ip_2_ip4(&ipaddr)));
+      if (host == 0u || host == 0xFFFFFFFFu || (host >> 24) >= 224u) {
+        network_rejectStaticConfig("unusable IP");
+        ok = false;
+      }
+    }
+    if (ok && !ip4_addr_isany_val(*ip_2_ip4(&gwy))) {
+      uint32_t m = ip4_addr_get_u32(ip_2_ip4(&netmask));
+      if ((ip4_addr_get_u32(ip_2_ip4(&gwy)) & m) !=
+          (ip4_addr_get_u32(ip_2_ip4(&ipaddr)) & m)) {
+        network_rejectStaticConfig("gateway off subnet");
+        ok = false;
+      }
+    }
+    if (!ok) {
+      goto static_ip_done;  // DHCP stays on
+    }
+    staticConfigRejected = false;
+    staticConfigReason[0] = '\0';
+    dhcp_stop(nif);
     netif_set_addr(nif, &ipaddr, &netmask, &gwy);
     DPRINTF("IP: %s\n", ipaddr_ntoa(&ipaddr));
     DPRINTF("Netmask: %s\n", ipaddr_ntoa(&netmask));
@@ -786,6 +823,7 @@ wifi_sta_conn_process_status_t network_wifiStaConnect() {
         }
       }
     }
+  static_ip_done:;
   }
   netif_set_up(nif);
 
@@ -827,8 +865,11 @@ wifi_sta_conn_process_status_t network_wifiStaConnect() {
     DPRINTF(
         "No password found in config. Trying to connect without password\n");
   }
-  DPRINTF("The password is: %s\n",
-          passwordValue != NULL ? passwordValue : "<null>");
+  // Never the password itself, only whether one is set: debug logs get saved
+  // and shared.
+  DPRINTF("Password: %s\n", (passwordValue != NULL && passwordValue[0] != '\0')
+                                ? "<set>"
+                                : "<none>");
 
   snprintf(wifiNetworkInfo.ssid, sizeof(wifiNetworkInfo.ssid), "%s", ssid->value);
   wifiNetworkInfo.auth_mode = (uint16_t)atoi(authMode->value);
@@ -837,8 +878,10 @@ wifi_sta_conn_process_status_t network_wifiStaConnect() {
 
   uint32_t authValue = getAuthPicoCode(atoi(authMode->value));
   int errorCode = 0;
-  DPRINTF("Connecting to SSID=%s, password=%s, auth=%08x. ASYNC\n", ssid->value,
-          passwordValue != NULL ? passwordValue : "<null>", authValue);
+  DPRINTF(
+      "Connecting to SSID=%s, password=%s, auth=%08x. ASYNC\n", ssid->value,
+      (passwordValue != NULL && passwordValue[0] != '\0') ? "<set>" : "<none>",
+      authValue);
   errorCode =
       cyw43_arch_wifi_connect_async(ssid->value, passwordValue, authValue);
   if (errorCode != 0) {

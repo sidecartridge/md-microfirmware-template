@@ -215,10 +215,20 @@ int settings_init(SettingsContext *ctx,
                   const SettingsConfigEntry *defaultEntries,
                   uint16_t defaultNumEntries, uint32_t flashOffset,
                   uint32_t flashSize, uint16_t magic, uint16_t version) {
-  // 1) Validate/Assign flash parameters
-  assert(flashSize % SETTINGS_FLASH_PAGE_SIZE == 0);
+  // 1) Validate/Assign flash parameters. These guard the erase and program
+  // ranges, so they are checked at run time: every build type defines NDEBUG,
+  // which removes assert().
+  if (flashSize % SETTINGS_FLASH_PAGE_SIZE != 0) {
+    DPRINTF("Error: flash size %lu is not a multiple of the %u-byte page.\n",
+            (unsigned long)flashSize, (unsigned)SETTINGS_FLASH_PAGE_SIZE);
+    return -1;
+  }
   ctx->flashSettingsSize = flashSize;
-  assert(flashOffset % SETTINGS_FLASH_PAGE_SIZE == 0);
+  if (flashOffset % SETTINGS_FLASH_PAGE_SIZE != 0) {
+    DPRINTF("Error: flash offset 0x%lx is not page-aligned.\n",
+            (unsigned long)flashOffset);
+    return -1;
+  }
   ctx->flashSettingsOffset = flashOffset;
 
   DPRINTF("Flash settings size: %lu\n", (unsigned long)ctx->flashSettingsSize);
@@ -229,7 +239,11 @@ int settings_init(SettingsContext *ctx,
   size_t maxEntries = ctx->flashSettingsSize / sizeof(SettingsConfigEntry);
   DPRINTF("Max entries count: %zu\n", maxEntries);
 
-  assert(defaultNumEntries <= maxEntries);
+  if (defaultNumEntries > maxEntries) {
+    DPRINTF("Error: %u default entries do not fit in %zu slots.\n",
+            (unsigned)defaultNumEntries, maxEntries);
+    return -1;
+  }
   DPRINTF("Default entries count: %d\n", defaultNumEntries);
 
   // 3) Prepare the configData structure
@@ -494,10 +508,16 @@ void settings_print(SettingsContext *ctx, char *buffer) {
         break;
     }
 
-    // Print in the format: "KEY (TYPE): Value\n"
+    // Print in the format: "KEY (TYPE): Value\n", except for secrets: the
+    // result goes to the debug console, whose logs get saved and shared, and
+    // to the ST's screen, so a key whose name says it holds a password prints
+    // only whether one is set.
+    const char *value = ctx->configData.entries[i].value;
+    if (strstr(ctx->configData.entries[i].key, "PASSWORD") != NULL) {
+      value = (value[0] != '\0') ? "<set>" : "<none>";
+    }
     len = snprintf(ptr, remaining, "%s (%s): %s\n",
-                   ctx->configData.entries[i].key, typeStr,
-                   ctx->configData.entries[i].value);
+                   ctx->configData.entries[i].key, typeStr, value);
 
     ptr += len;
     remaining = (len < remaining) ? (remaining - len) : 0;

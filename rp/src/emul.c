@@ -16,6 +16,8 @@
 #include "commemul.h"
 #include "constants.h"
 #include "debug.h"
+#include "devdownload.h"  // Debug-only test download, driven over SWD
+#include "devhooks.h"     // Debug-only SWD mailbox; include in this file only
 #include "display.h"
 #include "ff.h"
 #include "gconfig.h"
@@ -30,6 +32,11 @@
 #include "term.h"
 
 #define SLEEP_LOOP_MS 100
+
+// How long a sentinel command the ST must act on before this side moves on
+// is held. The ST reads the sentinel once per pass of its menu loop (measured
+// on an ST: within 42 ms); the hold is well over that.
+#define SENTINEL_HOLD_MS 500
 
 enum {
   APP_MODE_SETUP = 255  // Setup
@@ -80,9 +87,58 @@ static absolute_time_t menuRefreshTime;
 
 // Polling tick used as the network poll callback so command handling stays
 // alive during multi-second WiFi operations.
+#if defined(_DEBUG) && (_DEBUG != 0)
+// Heap held on request by `swd.py app heap_hold`, to test running out of it.
+typedef struct DevhooksHeldBlock {
+  struct DevhooksHeldBlock *next;
+} DevhooksHeldBlock;
+static DevhooksHeldBlock *devhooksHeldHeap = NULL;
+
+// App commands sent over SWD by tools/dev/swd.py (see emul.h).
+static uint32_t emul_devhooksApp(uint16_t commandId, const uint16_t *payload,
+                                 uint16_t payloadSize) {
+  switch (commandId) {
+    case DEVHOOKS_APP_HEAP_HOLD: {
+      uint32_t kb = (payloadSize >= 2u) ? payload[0] : 0u;
+      if (kb == 0u) {
+        while (devhooksHeldHeap != NULL) {
+          DevhooksHeldBlock *next = devhooksHeldHeap->next;
+          free(devhooksHeldHeap);
+          devhooksHeldHeap = next;
+        }
+        DPRINTF("devhooks: heap hold released\n");
+        return 1;
+      }
+      DevhooksHeldBlock *block = malloc(sizeof(DevhooksHeldBlock) + kb * 1024u);
+      if (block != NULL) {
+        block->next = devhooksHeldHeap;
+        devhooksHeldHeap = block;
+      }
+      DPRINTF("devhooks: holding %lu KB more heap: %s\n", (unsigned long)kb,
+              (block != NULL) ? "ok" : "refused");
+      return (block != NULL) ? 1u : 0u;
+    }
+    case DEVHOOKS_APP_DOWNLOAD:
+      return devdownload_start();
+    default:
+      return 0;
+  }
+}
+#endif
+
+// Keep answering the ST for ms milliseconds, so a command in flight is not
+// left without its answer while a sentinel command waits to be seen.
+static void emul_serviceFor(uint32_t ms) {
+  absolute_time_t until = make_timeout_time_ms(ms);
+  while (absolute_time_diff_us(get_absolute_time(), until) > 0) {
+    chandler_loop();
+  }
+}
+
 static void __not_in_flash_func(emul_pollTick)(void) {
   chandler_loop();
   term_loop();
+  select_poll();
 }
 
 #define MENU_REFRESH_TIME_MS 1000
@@ -98,12 +154,64 @@ static void showTitle() {
       "Microfirmware test app - " RELEASE_VERSION "\n");
 }
 
+// What the ST told this RP at its boot: its hello, then its machine (the _MCH
+// cookie, shared variable 0) and its TOS (shared variable 1).
+static void atariLine(char *line, size_t size) {
+  if (!chandler_stPresent()) {
+    snprintf(line, size, "Atari     : no hello yet (reset the ST)");
+    return;
+  }
+  uint32_t machine = 0;
+  uint32_t versions = 0;
+  GET_SHARED_VAR(CHANDLER_HARDWARE_TYPE, &machine,
+                 (uint32_t)&__rom_in_ram_start__,
+                 CHANDLER_SHARED_VARIABLES_OFFSET);
+  GET_SHARED_VAR(CHANDLER_SVERSION, &versions, (uint32_t)&__rom_in_ram_start__,
+                 CHANDLER_SHARED_VARIABLES_OFFSET);
+  const char *name = NULL;
+  switch (machine) {
+    case 0x00000000:
+      name = "ST";
+      break;
+    case 0x00010000:
+      name = "STE";
+      break;
+    case 0x00010001:
+      name = "ST Book";
+      break;
+    case 0x00010010:
+      name = "Mega STE";
+      break;
+    case 0x00020000:
+      name = "TT";
+      break;
+    case 0x00030000:
+      name = "Falcon";
+      break;
+    default:
+      break;
+  }
+  uint32_t tos = versions >> 16;
+  if (name != NULL) {
+    snprintf(line, size, "Atari     : %s, TOS %lx.%02lx", name,
+             (unsigned long)(tos >> 8), (unsigned long)(tos & 0xFF));
+  } else {
+    snprintf(line, size, "Atari     : _MCH %08lx, TOS %lx.%02lx",
+             (unsigned long)machine, (unsigned long)(tos >> 8),
+             (unsigned long)(tos & 0xFF));
+  }
+}
+static char atariLineShown[TERM_SCREEN_SIZE_X] = {0};
+
 static void menu(void) {
   menuScreenActive = true;
   showTitle();
-  term_printString("\n\n");
+  term_printString("\n");
   term_printString("[S]ettings     | [F]irmware launch\n");
   term_printString("[E]xit desktop | [X] Back to Booster\n\n");
+  atariLine(atariLineShown, sizeof(atariLineShown));
+  term_printString(atariLineShown);
+  term_printString("\n");
 
   // Display network information
   term_printNetworkInfo();
@@ -141,6 +249,12 @@ void cmdExit(const char *arg) {
 }
 
 void cmdFirmware(const char *arg) {
+  if (!chandler_stPresent()) {
+    // The user firmware relies on what the ST publishes at boot (the machine
+    // type, for a Mega STE's cache), and this RP has not heard it yet.
+    term_printString("\nReset the Atari ST first.\n");
+    return;
+  }
   menuScreenActive = false;
   term_printString("Launching user firmware on the Atari ST...\n");
   // Write CMD_START into the cartridge sentinel slot. The m68k's
@@ -326,6 +440,27 @@ void emul_start() {
   //
   // Copy the terminal firmware to RAM
   COPY_FIRMWARE_TO_RAM((uint16_t *)target_firmware, target_firmware_length);
+#if defined(_DEBUG) && (_DEBUG != 0)
+  // The ST must see exactly the generated image.
+  if (memcmp((const void *)&__rom_in_ram_start__, target_firmware,
+             (size_t)target_firmware_length * sizeof(uint16_t)) != 0) {
+    DPRINTF("ERROR: cartridge image in RAM does not match target_firmware\n");
+  } else {
+    DPRINTF("Cartridge image in RAM verified (%u words)\n",
+            (unsigned)target_firmware_length);
+  }
+  // Nothing from a previous run may survive past the end of the image.
+  {
+    const uint8_t *window = (const uint8_t *)&__rom_in_ram_start__;
+    size_t used = (size_t)target_firmware_length * sizeof(uint16_t);
+    size_t leftovers = 0;
+    for (size_t i = used; i < ROM_SIZE_BYTES * ROM_BANKS; i++) {
+      if (window[i] != 0) leftovers++;
+    }
+    DPRINTF("Cartridge window after the image: %u non-zero bytes\n",
+            (unsigned)leftovers);
+  }
+#endif
 
   // Initialize the cartridge ROM4 read engine. ROM4 reads are served entirely
   // by chained DMAs feeding the PIO TX FIFO — no CPU/IRQ involvement.
@@ -360,6 +495,15 @@ void emul_start() {
   // Initialize the display
   display_setupU8g2();
 
+  // Configure the SELECT button before anything slow (the SD card, the
+  // network), so a press is seen from here on; its edge interrupt catches one
+  // made while a wait cannot poll. A short press restarts the RP. A press held
+  // for SELECT_LONG_RESET is a factory reset: the global settings are erased
+  // and the RP restarts into Booster, which then clears every app's settings.
+  select_configure();
+  select_setResetCallback(reset_device);
+  select_setLongResetCallback(reset_deviceAndEraseFlash);
+
   // 5. Init the sd card
   // Most of the apps or microfirmwares will need to read and write files
   // to the SD card. The SD card is used to store the ROM, floppies, even
@@ -370,7 +514,9 @@ void emul_start() {
   // files are stored. The folder name is defined in the configuration.
   // If there is no folder in the micro SD card, the app will create it.
 
-  FATFS fsys;
+  // Static, not on the stack: FatFs keeps a pointer to it while the card is
+  // mounted, and it would take a quarter of core 0's stack.
+  static FATFS fsys;
   SettingsConfigEntry *folder =
       settings_find_entry(aconfig_getContext(), ACONFIG_PARAM_FOLDER);
   char *folderName = "/test";  // MODIFY THIS TO YOUR FOLDER NAME
@@ -450,10 +596,7 @@ void emul_start() {
     }
   }
 
-  // 7. Configure the SELECT button so menu status can show it immediately.
-  select_configure();
-
-  // 8. Now complete the terminal emulator initialization
+  // 7. Now complete the terminal emulator initialization
   // The terminal emulator is used to interact with the user to configure the
   // device.
   init();
@@ -463,21 +606,51 @@ void emul_start() {
   blink_on();
 #endif
 
-  // 9. Start the main loop
+  // 8. Start the main loop
   // The main loop is the core of the app. It is responsible for running the
   // app, handling the user input, and performing the tasks of the app.
   // The main loop runs until the user decides to exit.
   // For testing purposes, this app only shows commands to manage the settings
+  // Debug builds only: serve the SWD mailbox of tools/dev/swd.py
+  devhooks_setAppHandler(emul_devhooksApp);
+
   DPRINTF("Start the app loop here\n");
+  absolute_time_t nextNetworkPoll = get_absolute_time();
   while (getKeepActive()) {
-#if PICO_CYW43_ARCH_POLL
-    network_safePoll();
-    cyw43_arch_wait_for_work_until(make_timeout_time_ms(SLEEP_LOOP_MS));
-#else
-    sleep_ms(SLEEP_LOOP_MS);
-#endif
-    // Drain the ROM3 command ring → dispatch to registered callbacks.
+    devhooks_poll();
+    devdownload_poll();
+    select_poll();
+    // Drain the ROM3 command ring and dispatch to the registered callbacks on
+    // every pass: the ST spins on its answer, so the loop never waits.
     chandler_loop();
+    if (chandler_consumeStBoot()) {
+      // A new ST session: nothing typed before the reset carries over, and
+      // the ST gets a freshly drawn menu.
+      term_clearInputBuffer();
+      if (menuScreenActive) {
+        menu();
+        display_refresh();
+      }
+    }
+    if (chandler_consumeSharedVarSet() && menuScreenActive) {
+      // The ST publishes its machine and TOS just after its hello.
+      char line[TERM_SCREEN_SIZE_X];
+      atariLine(line, sizeof(line));
+      if (strcmp(line, atariLineShown) != 0) {
+        menu();
+        display_refresh();
+      }
+    }
+#if PICO_CYW43_ARCH_POLL
+    // Wi-Fi every 10 ms, which is plenty for lwIP's timers and leaves the
+    // loop to the command ring. Polling on every pass also works: a HardFault
+    // inside cyw43_arch_poll() once blamed on it was the debug probe's tooling
+    // writing into this firmware's RAM (fixed in tools/dev/swd.py).
+    if (absolute_time_diff_us(nextNetworkPoll, get_absolute_time()) >= 0) {
+      network_safePoll();
+      nextNetworkPoll = make_timeout_time_ms(10);
+    }
+#endif
 
     // Run the terminal foreground (consume the published command, render
     // output, etc.).
@@ -494,14 +667,16 @@ void emul_start() {
     }
   }
 
-  // 10. Send RESET computer command
+  // 9. Send RESET computer command
   // Ok, so we are done with the setup but we want to reset the computer to
   // reboot in the same microfirmware app or start the booster app
 
-  sleep_ms(SLEEP_LOOP_MS);
-  // We must reset the computer
+  emul_serviceFor(SLEEP_LOOP_MS);
+  // We must reset the computer. Hold the command long enough for the ST's
+  // menu loop to see it, and keep answering: a keystroke in flight would
+  // otherwise keep the ST in its send, retrying, until the hold was over.
   SEND_COMMAND_TO_DISPLAY(DISPLAY_COMMAND_RESET);
-  sleep_ms(SLEEP_LOOP_MS);
+  emul_serviceFor(SENTINEL_HOLD_MS);
   if (getResetDevice()) {
     // Reset the device
     reset_device();

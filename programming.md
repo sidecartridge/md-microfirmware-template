@@ -395,53 +395,35 @@ This modelo implements the commands that listen for remote keystrokes and conver
 
 ##### download.c
 
-As the name suggests, this module is responsible for downloading any kind of file from a remote HTTP/S server and saving it to the micro SD card. It uses the `httpc` library to implement the functionality.
+As the name suggests, this module is responsible for downloading any kind of file from a remote HTTP server and saving it to the micro SD card, through `tmp.download` in the app folder. It uses lwIP's HTTP client (`httpc/`). `https://` needs a build with HTTPS (`APP_DOWNLOAD_HTTPS=1 ./build.sh ...`); the default build refuses it with `DOWNLOAD_HTTPSNOTBUILT_ERROR`. The server's certificate is not verified.
 
-The file download is implemented aysnchronously, so the app can continue running while the file is being downloaded. To download a file, it must be polled in a loop. This is an example from the `md-rom-emulator` microfirmware app:
+The download runs asynchronously: `download_poll()` never waits, so call it from the main loop, which keeps serving the ST, while the status is `DOWNLOAD_STATUS_STARTED` or `DOWNLOAD_STATUS_IN_PROGRESS`. It follows redirects and retries a failed hop by itself. Only a 2xx response reaches the file; on any failure the temporary file is deleted, the status is `DOWNLOAD_STATUS_FAILED`, and `download_finish()` returns the reason (also `download_getError()` and `download_getHttpStatus()`). A sketch:
 
 ```c
-  DPRINTF("Start the app loop here\n");
-  absolute_time_t startDownloadTime =
-      make_timeout_time_ms(DOWNLOAD_DAY_MS);  // Future time
+  download_setFilepath("http://example.com/files/GAME.ST");  // saved as GAME.ST
+  if (download_start() != DOWNLOAD_OK) {
+    DPRINTF("Cannot start: %d\n", download_getError());
+  }
   while (getKeepActive()) {
-#if PICO_CYW43_ARCH_POLL
-    network_safe_poll();
-    cyw43_arch_wait_for_work_until(wifi_scan_time);
-#else
-    sleep_ms(SLEEP_LOOP_MS);
-#endif
-    // Check remote commands
+    chandler_loop();  // keep answering the ST
     term_loop();
-
-    // Check the download status
     switch (download_getStatus()) {
-      case DOWNLOAD_STATUS_REQUESTED: {
-        startDownloadTime = make_timeout_time_ms(
-            DOWNLOAD_START_MS);  // 3 seconds to start the download
-        download_setStatus(DOWNLOAD_STATUS_NOT_STARTED);
-        break;
-      }
-      case DOWNLOAD_STATUS_NOT_STARTED: {
-        if ((absolute_time_diff_us(get_absolute_time(), startDownloadTime) <
-             0)) {
-          download_err_t err = download_start();
-          if (err != DOWNLOAD_OK) {
-            DPRINTF("Error downloading app. Drive to error page.\n");
-          }
-        }
-        break;
-      }
-      case DOWNLOAD_STATUS_IN_PROGRESS: {
+      case DOWNLOAD_STATUS_STARTED:
+      case DOWNLOAD_STATUS_IN_PROGRESS:
         download_poll();
         break;
-      }
-      case DOWNLOAD_STATUS_COMPLETED: {
-        // Save the app info to the SD card
+      case DOWNLOAD_STATUS_COMPLETED:
         download_finish();
-        download_confirm();
+        download_confirm();  // tmp.download -> GAME.ST
         download_setStatus(DOWNLOAD_STATUS_IDLE);
         break;
-      }
+      case DOWNLOAD_STATUS_FAILED:
+        DPRINTF("Download failed: %d (HTTP %d)\n", download_finish(),
+                download_getHttpStatus());
+        download_setStatus(DOWNLOAD_STATUS_IDLE);
+        break;
+      default:
+        break;
     }
   }
 ```
@@ -579,7 +561,7 @@ if (wifiMode == NULL) {
 In this example, we check if the WiFi mode is set to STA. If it is, we initialize the network and connect to the WiFi network. The code blocks until the connection is established or the maximum number of attempts is reached. If the connection is not established, we return an error code. The `network_setPollingCallback` allows to set a callback function that will be called during the polling period. This is useful to handle the network events and update the UI.
 
 {: .note}
-The polling callback should drain the ROM3 command ring **and** the terminal loop so that commands sent during the multi-second WiFi connect window are not dropped. The template ships an `emul_pollTick` helper that calls `chandler_loop(); term_loop();` and installs it via `network_setPollingCallback(emul_pollTick);` while the connect is in flight. Apps that pass `term_loop` directly will leak commands during connect.
+The polling callback should drain the ROM3 command ring **and** the terminal loop so that commands sent during the multi-second WiFi connect window are not dropped. The template ships an `emul_pollTick` helper that calls `chandler_loop(); term_loop(); select_poll();` and installs it via `network_setPollingCallback(emul_pollTick);` while the connect is in flight. Apps that pass `term_loop` directly will leak commands during connect.
 
 To keep the code simple, give up the app if the network connection is not established. If the connection is successful, continue with the critical path of the app.
 
@@ -609,9 +591,11 @@ The cartridge ROM3 region is no longer a data bank. It is reserved for the comma
 
 `commemul_init()` brings up:
 - A dedicated PIO state machine on `ROM3_GPIO` that waits on the ROM3 chip-select and pushes the 16-bit address onto the RX FIFO.
-- A single DMA channel running in **ring mode** (`channel_config_set_ring`) that drains the FIFO into a 32 KB / 16 384-word ring buffer perpetually (`COMM_DMA_TRANSFER_COUNT = 0xFFFFFFFF`).
+- A single DMA channel running in **ring mode** (`channel_config_set_ring`) that drains the FIFO into a 16 KB / 8,192-sample ring buffer. The size holds about two of the largest sends the ST can make, retries included; the arithmetic is next to `COMM_RING_BITS` in `commemul.c`.
 
-There are no IRQs anywhere in this path. The application drains the ring by calling `commemul_poll(callback)`, which derives the producer index from `dma_hw->ch[ch].transfer_count` and invokes the callback for every new sample.
+There are no IRQs anywhere in this path. The application drains the ring by calling `commemul_poll(callback)`, which derives the producer index from `dma_hw->ch[ch].transfer_count` and invokes the callback for every new sample. If the application stops draining for long enough that a whole ring arrives, the lap is counted (`commemul_getOverruns()`) and the unread samples are dropped rather than parsed as a mix of old and new ones; the parser then resynchronises on the next header. The channel is re-armed from its live write address long before its transfer count runs out, so capture never stops.
+
+`chandler.c` keeps counters of the handshake as plain globals: commands answered, dropped while one was pending, repeated with the previous token (the ST retrying), checksum errors, and the time spent busy, waiting for the ST, and draining. `tools/dev/swd.py counters` reads them from a running release or debug build.
 
 ##### chandler.c (command dispatcher)
 
@@ -676,25 +660,24 @@ This module is responsible for handling the SELECT button on the device.
 
 The SELECT can have two different functions:
 
-- Short SELECT: Push and release immediately. This is used to return to the configuration menu of the app.
-- Long SELECT: Push and hold for more than ten (10) seconds. This is used to reset the device and erase the flash memory, returning to the Booster app.
+- Short SELECT: Push and release. The template restarts the RP, which brings the app back to its configuration menu.
+- Long SELECT: Push and hold for ten (10) seconds (`SELECT_LONG_RESET`). This is a factory reset: `reset_deviceAndEraseFlash()` erases the global settings and the device restarts into the Booster app, which then clears the settings of every app.
 
-In this example we will implement the long SELECT function. The short SELECT is only implemented with pure status checks, but the long SELECT is implemented with a callback function. Both can be configured as callback functions.
+`select_poll()` runs the button's state machine and never blocks. It debounces over 30 ms and calls the long-press callback as soon as the button has been held for `SELECT_LONG_RESET`; otherwise it calls the short-press callback on release. Call it from the main loop and from every long wait, next to `chandler_loop()`. A GPIO edge interrupt set up by `select_configure()` records a press that started and ended while nothing could poll, and the next call handles it.
 
 ```c
 select_configure();
+select_setResetCallback(reset_device);
 select_setLongResetCallback(reset_deviceAndEraseFlash);
 
-// Wait until SELECT is pressed
-while (!select_detectPush()) {
-  // Run the ROM emulation state machine
-  sleep_ms(SLEEP_LOOP_MS);
+while (keepActive) {
+  select_poll();    // never blocks
+  chandler_loop();  // commands from the ST
+  // ... the rest of the app
 }
-// Select button pressed. Wait until it is released
-select_waitPush();
 ```
 
-In the main loop of the critical path of the app, we check if the SELECT button is pressed. If it is, we wait until it is released. This is a blocking call, so the app will wait until the SELECT button is released.
+Keep SELECT on core 0. A watcher on core 1 ran the long press's flash erase while core 0 executed from the same flash, and both cores faulted until a power cycle.
 
 ##### term.c 
 
@@ -705,12 +688,14 @@ Example of the code that implemens the high level commands of the terminal. It a
 The memory mapping of the Multi-device board is defined in the file `rp/src/memmap_rp.ld` and it performs significant changes to the standard memory mapping of a RP2040 application. The memory mapping of the Multi-device board is:
 - FLASH: Reduced from the 2MBytes found in the Raspberry Pi Pico W boards to 1024Kbytes for the active microfirmware app.
 - RAM: Reduced from the 264KBytes found in the Raspberry Pi Pico W boards to **192Kbytes** (origin `0x20000000`, length `192K`).
-- SCRATCH_X: No changes.
-- SCRATCH_Y: No changes.
+- SCRATCH_X: No changes. Core 1's stack; the template never starts core 1. A build with HTTPS downloads (`APP_DOWNLOAD_HTTPS=1`) gives it to core 0's stack instead, since a TLS handshake came too close to 4Kbytes.
+- SCRATCH_Y: Core 0's stack, all 4Kbytes (`PICO_STACK_SIZE`), with an MPU guard on its bottom 32 bytes: an overflow is a HardFault instead of silent damage. With HTTPS the stack runs on through SCRATCH_X, 8Kbytes, and the guard sits at the bottom of SCRATCH_X.
 - CONFIG_FLASH: FLASH memory reserved for the configuration parameters of the Multi-device board. 4Kbytes.
 - ROM_IN_RAM: RAM memory reserved for the cartridge ROM4 image. **64Kbytes** at `0x20030000`. This is exactly one cartridge ROM bank; the second 64 KB bank is no longer mirrored to RAM since ROM3 is now used as a command channel rather than a data bank.
 
 The split between `RAM` (192K) and `ROM_IN_RAM` (64K) is fixed: the ROM4 read engine derives the address it serves from `__rom_in_ram_start__` (a symbol defined by the linker script), and changing the location or size of `ROM_IN_RAM` would require updating both the linker script and the C-side address shift in `init_romemul`.
+
+The heap ends where `RAM` ends (`__StackLimit`), so it can never hand out memory inside the cartridge window, and malloc returns NULL when it runs out (`PICO_MALLOC_PANIC=0`): check every allocation. The link guarantees 32Kbytes of heap (`PICO_HEAP_SIZE`); if your static buffers leave less, it fails with ``region `RAM' overflowed``. Keep big buffers off the stack: the setup menu already uses about 1.7Kbytes of core 0's 4Kbytes.
 
 ##### Shared 64 KB region layout
 
@@ -803,13 +788,26 @@ The cartridge image is split into two `.text` sections by `target/atarist/src/us
 | `0x000000`  | `$FA0000`       | 2 KB    | `main.s` — boot + dispatch    |
 | `0x000800`  | `$FA0800`       | 6 KB    | `userfw.s` — user firmware    |
 
-`main.s` exposes the user firmware entry as `USERFW equ (ROM4_ADDR + $800)`. Once the RP signals readiness via `CMD_START` on the cartridge sentinel, `main.s`'s `check_commands` macro `beq`s to `rom_function`, which simply does `jmp USERFW`. There is no implicit return path — `userfw.s` owns execution from that point.
+`USERFW equ (ROM4_ADDR + $800)` names the entry. Once the RP writes `CMD_START` to the cartridge sentinel, `main.s`'s `check_commands` macro `beq`s to `rom_function`, which puts back a Mega STE's cache setting and does `jmp USERFW`. The top of the stack is then TOS's return address: an `rts` from the user firmware lets TOS carry on booting, as the demo does.
 
 How to launch the user firmware:
-- From the RP/terminal side: pick `[F]irmware` in the menu (key `f`). The `cmdFirmware` handler in `rp/src/emul.c` writes `DISPLAY_COMMAND_START` (= `4` = `CMD_START`) to the cartridge sentinel via `SEND_COMMAND_TO_DISPLAY`. The m68k's vsync-polled `check_commands` then dispatches to `USERFW`.
-- The whole hand-off is one-way; if your firmware needs to return control, it must do so explicitly (`jmp boot_gem` to continue the normal boot flow, loop forever, etc.).
+- From the RP/terminal side: pick `[F]irmware` in the menu (key `f`). The `cmdFirmware` handler in `rp/src/emul.c` writes `DISPLAY_COMMAND_START` (= `4` = `CMD_START`) to the cartridge sentinel via `SEND_COMMAND_TO_DISPLAY`. The m68k's vsync-polled `check_commands` then dispatches to `USERFW`. The command is refused until the RP has had the ST's hello since it started: after an RP-only reboot, reset the ST first.
+- The sentinel is a level, not a queue: it stays at `CMD_START` until the RP writes something else, so resetting the ST runs the user firmware again.
 
-What the default `userfw.s` ships with:
+What `userfw.s` has to work with (all included at its top, the senders at its end):
+
+| File | What it gives |
+| --- | --- |
+| `inc/sidecart_layout.s` | The cartridge window (`RANDOM_TOKEN_ADDR`, `SHARED_VARIABLES`, `APP_FREE_ADDR`, `FRAMEBUFFER_ADDR`, …) and the command channel. Shared with `main.s`; the single source of truth on the m68k side. |
+| `inc/sidecart_macros.s` | `send_sync` / `send_write_sync`, what a send keeps and destroys, and the Mega STE cache macros. |
+| `inc/tos.s` | GEMDOS, BIOS and XBIOS function numbers. They are decimal in `cmp.w #n`; the documents often give them in hex. |
+| `inc/sidecart_functions.s` | The senders themselves, `detect_hw` and `get_tos_version`. Included at the end of the module, followed by the NOP tail. |
+
+Two rules for the code itself:
+- **Everything is PC-relative.** The module runs from the cartridge but is linked at offset `$0800`, not at `$FA0800`: use `lea label(pc), a0`, never an absolute label.
+- **The module ends with the NOP tail**, after `include "inc/sidecart_functions.s"`: `even`, eight `nop`s, a `<module>_end:` label. `firmware.py` strips trailing zeros from the image and the RP copies only that many words into the window, while the write sender and the 68000's prefetch read past the end of the wait loop. `userfw.s` is the last module in the image, so this is not optional there.
+
+The default `userfw.s` prints a message and returns:
 
 ```asm
 userfw:
@@ -819,20 +817,14 @@ userfw:
     trap    #1                      ; call GEMDOS
     addq.l  #6, sp                  ; clean up arguments
     rts
-
-hello_msg:
-    dc.b    27,"E"                   ; VT52 clear screen + home cursor
-    dc.b    "Example firmware load..."
-    dc.b    0
-    even
 ```
 
-Replace the body with your own m68k code; the shared-region symbols defined in `main.s` (`RANDOM_TOKEN_ADDR`, `SHARED_VARIABLES`, `APP_FREE_ADDR`, …) are reachable from `userfw.s` as well. Keep the total cartridge image (`main.s` + `userfw.s` after vlink padding) within `CARTRIDGE_CODE_SIZE = 8 KB`; `target/atarist/build.sh` enforces this against `BOOT.BIN` after `vlink`.
+Keep the total cartridge image (`main.s` + `userfw.s`) within `CARTRIDGE_CODE_SIZE = 8 KB`; `target/atarist/build.sh` enforces this against `BOOT.BIN` after `vlink`.
 
 Adding more modules (mirroring md-drives-emulator's `gemdrive.ld` pattern):
 1. Pick an offset within the cartridge budget and add a new `.text_<name> 0x????? : { <name>.o(.text) }` section to `userfw.ld`.
-2. Mirror the offset on the m68k side with an `equ (ROM4_ADDR + $????)` symbol in `main.s`.
-3. Add the `.o` target to `target/atarist/Makefile` and link it in.
+2. Mirror the offset on the m68k side with an `equ (ROM4_ADDR + $????)` symbol in `inc/sidecart_layout.s`.
+3. Add the `.o` target to `target/atarist/Makefile` and link it in. A module that talks to the RP includes the same files as `userfw.s` and ends with the NOP tail.
 4. Either chain modules from `rom_function` (e.g. `jsr GEMDRIVE / jsr FLOPPYEMUL / jmp USERFW`), or add a new sentinel command and dispatch from `check_commands`.
 
 #### The Transmision Protocol (TPROTOCOL)
@@ -998,48 +990,54 @@ Returning values to the Atari ST is a much more easy task. In order to do so, wr
 
 ###### Sending commands from the remote computer
 
-The commands are sent from the remote Atari ST computer using the `sidecart_functions.s` functions defined in the `/target/atarist/src/inc` folder. These functions are implemented in assembler and are used to send the commands to the microcontroller:
-
-The `send_sync_command_to_sidecart` function sends a commands in d0.w to the microcontroller and waits for a response from the microcontroller. The response is a random number that is used as a token to identify the command. The function returns an error code in the d0 register. The payload size is passed in d1.w, and payload is passed in the d3 to d6 registers, depending on the size of the payload.
-
-But if you want to send a command with much larger payload, you can use the `send_sync_write_command_to_sidecart` function. This function sends a command in d0.w to the microcontroller and waits for a response. The response is a random number that is used as a token to identify the command. The function returns an error code in the d0 register. The payload size is as follows:
-- d3.l, d4.l and d5.l registers passed ALWAYS as argument.
-- a4 marks the start address of the buffer to send.
-- d6.w size of the buffer to send.
-
-So the effective payload size that the microcontroller will read will be d6.w + $C. The first 6 long words of d3.l d4.l and d5.l plus the buffer. 
-
-For the sake of convenience, the `sidecart_macros.s` implements these two macros to easy the development:
+The ST sends commands with the functions in `target/atarist/src/inc/sidecart_functions.s`, through the macros in `inc/sidecart_macros.s`:
 
 ```asm
-; Send a synchronous command to the Multi-device passing arguments in the Dx registers
-; /1 : The command code
-; /2 : The payload size (even number always)
-send_sync           macro
-                    moveq.l #\2, d1                      ; Set the payload size of the command
-                    move.w #\1,d0                        ; Command code
-                    bsr send_sync_command_to_sidecart    ; Send the command to the Multi-device
-                    endm    
-
-; Send a synchronous write command to the Multi-device passing arguments in the D3-D5 registers
-; A4 address of the buffer to send
-; /1 : The command code
-; /2 : The buffer size to send in bytes (will be rounded to the next word)
-send_write_sync     macro
-                    move.w #\1,d0                           ; Command code
-                    moveq.l #12, d1                         ; Set the payload size of the command (d3.l, d4.l and d5.l)
-                    move.l #\2,d6                           ; Number of bytes to send
-                    bsr send_sync_write_command_to_sidecart ; Send the command to the Multi-device
-                    endm    
+send_sync       <command>, <payload bytes>   ; payload in d3-d6 (0 to 16 bytes)
+send_write_sync <command>, <buffer bytes>    ; d3, d4, d5 always sent, then the buffer at a4
 ```
 
-And an exmaple of the use:
+Each macro sends the command, waits for the RP's answer and resends up to `CMD_RETRIES_COUNT` times. It returns with `d0 = 0` and Z set on success, `d0` non-zero and Z clear when every attempt timed out. The functions underneath (`send_sync_command_to_sidecart`, `send_sync_write_command_to_sidecart`) keep the same contract, so code may branch on the flags straight after either.
+
+What a send keeps, measured on an ST:
+
+| Macro | Keeps | Destroys |
+| --- | --- | --- |
+| `send_sync` | d1-d6 | d0, d7 (its retry count), a0-a1 (a0-a3 when the wait loop is copied, `COMMAND_SYNC_USE_DSKBUF` not 0) |
+| `send_write_sync` | d1-d5, a4 | d0, d6 (its retry count), d7, a0-a1 (a0-a3 likewise) |
+
+The senders leave a0 and a1 pointing into the ROM3 command window: a payload read through them is itself sampled by the RP, and the command fails its checksum on every retry. Take what you need into a kept register before the send, and reload address registers after it.
+
+How the exchange works, and what each side may assume:
+
+- **The command is read, not written.** The cartridge port is read-only, so the ST emits each 16-bit word by reading `$FB8000 + word`: the header `$ABCD`, the command, the payload size, the random token, the payload and a checksum.
+- **The answer is a two-phase commit.** The token is the seed the ST read at `RANDOM_TOKEN_SEED_ADDR` just before sending. The RP writes the token back to `RANDOM_TOKEN_ADDR`, then a new seed; the ST accepts the answer only when the token matches *and* the seed has moved. That also rejects the reads of a missing or not yet running cartridge, where both read the same.
+- **The timeout is a spin count, not time**, and it is per module: `COMMAND_TIMEOUT` counts turns of the loop that checks the token, so it is shorter on a faster CPU, and a module that defines its own before including `inc/sidecart_layout.s` keeps it.
+- **A retry is a new command.** It carries a fresh token, and the RP may already have executed the attempt whose answer the ST stopped waiting for. A command must be harmless to run twice, or carry its own sequence number.
+- **The RP answers first**, from its main loop, which drains the command ring on every pass without waiting. Measured on an ST: about 2 ms per command with a 4-byte payload, 3 ms with a 1 KB payload.
+- **A Mega STE's cache must be off while the ST talks to the cartridge**; its speed does not matter. `main.s` handles the setup menu. User firmware wraps each send in `megaste_cache_off` / `megaste_cache_back`.
+- **A 68030 (TT, Falcon) needs its instruction cache cleared** after code is copied into RAM and run. The senders do it when they copy their wait loop.
+
+- **The cartridge window is read-only from the ST.** Writes to `$FA0000`-`$FAFFFF` are silently lost on the bus. The ST changes what the RP holds by sending a command, such as `CMD_SET_SHARED_VAR` below.
+
+If the user firmware hooks a trap (GEMDOS, BIOS, XBIOS) to stay resident, md-drives-emulator learned these on hardware:
+
+- **Push nothing on the caller's stack before knowing the call is yours.** TOS 1.04 starts GEM on a 132-byte stack and calls GEMDOS from it with about 110 bytes to spare; decide from `d0` (and `a0` for a user-mode caller) and run the calls you take on a stack of your own.
+- **Find the arguments where the caller left them.** From supervisor mode they are on `sp` (plus 2 when `_longframe` is set, on a 68010 or later); from user mode they are at `usp` as it is, since the format word goes on the supervisor stack only.
+- **Code reached from a trap's `rte` runs in the caller's mode.** In user mode the first 2 KB of memory is a bus error: no system variables there, and no sender that copies its wait loop (it reads `_dskbufp` at `$4C6`).
+- **Give the caller its registers back as TOS does**: every one but `d0` to a supervisor-mode caller, all but `a0` to a user-mode one. Programs count on it.
+
+`$FF00` (`CMD_SET_SHARED_VAR`, `CHANDLER_SET_SHARED_VAR` on the RP) is answered by the RP's chandler itself: "set shared variable d3 to d4". `main.s` uses it at every boot, through `detect_hw` and `get_tos_version`, to publish the machine (`_MCH` cookie, 0 for an ST) in shared variable 0 and the TOS version in variable 1.
+
+`$FF01` (`CMD_ST_HELLO`, `CHANDLER_ST_HELLO` on the RP) has no payload and is also answered by the chandler itself. `main.s` sends it first thing at every boot, until it is answered, so the RP knows the ST has booted: `chandler_stPresent()` is true from then on, and `chandler_consumeStBoot()` is true once per boot. `chandler_consumeSharedVarSet()` is true once after the ST has set shared variables with `$FF00`, so whatever shows them can wait for it instead of polling. The RP and the ST reboot independently, so after an RP-only reboot the RP has not heard from the ST, and what the ST published at its boot was cleared with the window.
+
+An example, a keystroke for the terminal:
 
 ```asm
-send_sync APP_TERMINAL_KEYSTROKE, 4
+    move.l d0, d3                   ; the key, as Cnecin returned it
+    send_sync APP_TERMINAL_KEYSTROKE, 4
+    bne.s .not_answered             ; Z clear: every attempt timed out
 ```
-
-Obviously, don't forget to populate the d3.l register with the value of the keystroke!
 
 ### Debugging in Visual Studio Code
 

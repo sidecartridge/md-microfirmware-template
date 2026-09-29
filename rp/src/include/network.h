@@ -53,7 +53,6 @@
 
 #define NETWORK_MAC_SIZE 6
 
-#define MAX_NETWORKS 100
 #define MAX_SSID_LENGTH \
   36  // SSID can have up to 32 characters + null terminator + padding
 #define MAX_BSSID_LENGTH 20
@@ -113,12 +112,6 @@ typedef struct {
   int16_t rssi;                  // Received Signal Strength Indicator
 } wifi_network_info_t;
 
-typedef struct {
-  uint32_t magic;  // Some magic value for identification/validation
-  wifi_network_info_t networks[MAX_NETWORKS];
-  uint16_t count;  // The number of networks found/stored
-} wifi_scan_data_t;
-
 // Function to handle callback when trying to connect
 typedef void (*NetworkPollingCallback)(void);
 
@@ -168,34 +161,14 @@ void network_deInit();
 void network_safePoll();
 
 /**
- * @brief Initiates a scan for available WiFi networks.
- *
- * Uses timing parameters to control scanning frequency and duration.
- *
- * @param wifi_scan_time Pointer to an absolute time structure for scan timing.
- * @param wifi_scan_interval Interval between scanning cycles in milliseconds.
- * @return Number of networks discovered on success, or an error code if
- * scanning fails.
+ * @brief True when the static TCP/IP configuration was rejected and the
+ * interface fell back to DHCP. *reason, when not NULL, is set to why.
  */
-int network_scan(absolute_time_t* wifi_scan_time, int wifi_scan_interval);
+bool network_getStaticConfigRejected(const char** reason);
 
-/**
- * @brief Indicates whether a WiFi network scan is currently active.
- *
- * Useful for preventing concurrent scan attempts.
- *
- * @return Non-zero if a scan is in progress, zero otherwise.
- */
-int network_scanIsActive();
-
-/**
- * @brief Retrieves information about found WiFi networks.
- *
- * Provides the data structure containing the list of scanned networks.
- *
- * @return Pointer to a wifi_scan_data_t structure with network details.
- */
-wifi_scan_data_t* network_getFoundNetworks();
+// Wi-Fi scanning and configuration belong to Booster; an app only reads the
+// settings Booster writes. The scan path that stood here was never called,
+// and its callbacks were GCC nested functions, which clang cannot parse.
 
 /**
  * @brief Attempts connecting to a WiFi network in station mode.

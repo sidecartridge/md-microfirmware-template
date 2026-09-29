@@ -2,6 +2,44 @@
 
 ; Macros
 
+; What a send keeps and what it destroys. Check it before holding anything
+; across one of these: the senders leave a0-a1 (a0-a3 when they copy their wait
+; loop, COMMAND_SYNC_USE_DSKBUF not 0) pointing into the ROM3 command window,
+; and reading a payload from there makes the RP reject the command.
+;
+;   send_sync        keeps d1-d6          destroys d0, d7, a0-a3
+;   send_write_sync  keeps d1-d5, a4      destroys d0, d6, d7, a0-a3
+;
+; Each keeps its retry count in a register it destroys: send_sync in d7,
+; send_write_sync in d6 (the function it calls also uses d7).
+;
+; Take what you need into a kept register before the send, and reload address
+; registers after it.
+
+; A Mega STE's cache answers the cartridge's reads from copies it made before,
+; and the command channel breaks with it on; the CPU speed does not matter (all
+; measured at 16 MHz). So a driver turns the cache off, which empties it, once
+; it knows a call is its own, and puts the user's setting back when it is done.
+; What it reads to decide - its settings, the reentry lock - does not change
+; while the cache could hold a copy. The machine is the one detect_hw wrote in
+; the first shared variable; on every other machine the register is not there.
+; \1: where the setting is kept, a byte
+megaste_cache_off   macro
+                    cmp.l #COOKIE_JAR_MEGASTE, HARDWARE_TYPE_ADDR
+                    bne.s .\@megaste_cache_off_done
+                    move.b MEGASTE_SPEED_CACHE_REG.w, \1
+                    bclr #0, MEGASTE_SPEED_CACHE_REG.w
+.\@megaste_cache_off_done:
+                    endm
+
+; \1: where megaste_cache_off kept the setting
+megaste_cache_back  macro
+                    cmp.l #COOKIE_JAR_MEGASTE, HARDWARE_TYPE_ADDR
+                    bne.s .\@megaste_cache_back_done
+                    move.b \1, MEGASTE_SPEED_CACHE_REG.w
+.\@megaste_cache_back_done:
+                    endm
+
 ; Send a synchronous command to the Multi-device passing arguments in the Dx registers
 ; /1 : The command code
 ; /2 : The payload size (even number always)

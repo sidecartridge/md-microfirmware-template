@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# Fail fast. Without this a failed cmake, make or submodule pin was stepped
+# over, and the caller copied whatever UF2 an earlier build had left in
+# rp/dist. `-u` is not set: the positional arguments are optional.
+set -Eeo pipefail
+trap 'echo "ERROR: ${BASH_SOURCE[0]}: failed at line ${LINENO}" >&2' ERR
+
 # Down to main path
 cd ..
 
@@ -20,8 +26,9 @@ cd ..
 
 echo "Pinning the FatFs SDK versions..."
 cd fatfs-sdk
-#git checkout v3.5.1
-git checkout 6bdb39f96fe8b897aff12bf3416e32515792e318
+# v3.6.2 releases the card and SPI locks when a read fails: without it, the
+# second disk call after the card is pulled waits forever.
+git checkout tags/v3.6.2
 cd ..
 
 # FatFs configuration is overridden by rp/src/ff/ffconf.h; the CMake
@@ -48,12 +55,15 @@ else
     VERSION_FILE="version-$RELEASE_TYPE.txt"
 fi
 
-# Read the release version from the version.txt file
-export RELEASE_VERSION=$(cat "$VERSION_FILE" | tr -d '\r\n ')
+# Read the release version from the version.txt file. Assigned before it is
+# exported: `export VAR=$(...)` would hide a failed read.
+RELEASE_VERSION=$(cat "$VERSION_FILE" | tr -d '\r\n ')
+export RELEASE_VERSION
 echo "Release version: $RELEASE_VERSION"
 
-# Get the release date and time from the current date
-export RELEASE_DATE=$(date +"%Y-%m-%d %H:%M:%S")
+# Get the release date and time from the current date, unless the caller set
+# one: a fixed RELEASE_DATE makes two builds of the same commit byte-identical.
+export RELEASE_DATE=${RELEASE_DATE:-$(date +"%Y-%m-%d %H:%M:%S")}
 echo "Release date: $RELEASE_DATE"
 
 # Set the board type to be used for building
@@ -62,44 +72,55 @@ export BOARD_TYPE=${1:-pico_w}
 export PICO_BOARD=$BOARD_TYPE
 echo "Board type: $BOARD_TYPE"
 
-# Set the release or debug build type
-# If nothing passed as second argument, use release
-export BUILD_TYPE=${2:-release}
-echo "Build type: $BUILD_TYPE"
+# Build type, case-insensitive. If nothing is passed, use release. Both are
+# CMake Release (-O3); debug is the same build with DEBUG_MODE=1, so DPRINTF
+# traces go to the UART console and the SWD hooks are compiled in.
+BUILD_TYPE=$(echo "${2:-release}" | tr '[:upper:]' '[:lower:]')
+case "$BUILD_TYPE" in
+    release) export DEBUG_MODE=0 ;;
+    debug) export DEBUG_MODE=1 ;;
+    *)
+        echo "ERROR: unknown build type '$2'. Use release or debug."
+        exit 1
+        ;;
+esac
+export BUILD_TYPE
 
-# If the build type is release, set DEBUG_MODE environment variable to 0
-# Otherwise set it to 1
-if [ "$(echo "$BUILD_TYPE" | tr '[:upper:]' '[:lower:]')" = "release" ]; then
-    export DEBUG_MODE=0
-else
-    export DEBUG_MODE=1
+# Up to v1.2.x every build was compiled MinSizeRel, because a Release build
+# once broke at runtime (no reproducer was recorded). RP_CMAKE_BUILD_TYPE
+# replaces only the CMake build type: MinSizeRel to compare against those
+# builds, Debug (-Og, asserts on) to step through the code in a debugger.
+CMAKE_BUILD_TYPE_ARG=Release
+if [ -n "$RP_CMAKE_BUILD_TYPE" ]; then
+    CMAKE_BUILD_TYPE_ARG=$RP_CMAKE_BUILD_TYPE
+    echo "************************************************************"
+    echo "WARNING: RP_CMAKE_BUILD_TYPE=$RP_CMAKE_BUILD_TYPE overrides the"
+    echo "         CMake build type. This is not a shipping build."
+    echo "************************************************************"
 fi
+echo "Build type: $BUILD_TYPE (CMake $CMAKE_BUILD_TYPE_ARG, DEBUG_MODE=$DEBUG_MODE)"
 
-# Set the build directory. Delete previous contents if any
-echo "Deleting previous build directory"
-rm -rf build
-mkdir build
+# Set the build and dist directories. Delete previous contents if any, so a
+# failed build can never leave an older UF2 behind for the caller to copy.
+echo "Deleting previous build and dist directories"
+rm -rf build dist
+mkdir build dist
 
 # We assume that the last firmware was built for the same board type
 # And previously pushed to the repo version
 
 # Build the project
-# NOTE: The project is always built with CMAKE_BUILD_TYPE=MinSizeRel.
-#       Using a full Release build previously caused breakage (e.g. memory issues/over‑optimizations).
 echo "Building the project"
 cd build
-# Legacy option to honor BUILD_TYPE instead of forcing MinSizeRel:
-# cmake ../src -DCMAKE_BUILD_TYPE=$BUILD_TYPE
-cmake ../src -DCMAKE_BUILD_TYPE=MinSizeRel
+cmake ../src -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE_ARG"
 
-make -j4 
+make -j4
+cd ..
 
 # Copy the built firmware to the /dist folder
-cd ..
-mkdir -p dist
 echo "Copying the built firmware to the dist folder"
 if [ "$BUILD_TYPE" = "release" ]; then
-    cp build/rp.uf2 dist/rp-$BOARD_TYPE.uf2
+    cp build/rp.uf2 "dist/rp-$BOARD_TYPE.uf2"
 else
-    cp build/rp.uf2 dist/rp-$BOARD_TYPE-$BUILD_TYPE.uf2
+    cp build/rp.uf2 "dist/rp-$BOARD_TYPE-$BUILD_TYPE.uf2"
 fi

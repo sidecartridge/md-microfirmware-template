@@ -26,26 +26,58 @@
 #define MEM_SANITY_CHECK 0
 #define MEM_OVERFLOW_CHECK 0
 
+#if APP_DOWNLOAD_HTTPS
+// HTTPS profile (APP_DOWNLOAD_HTTPS=1), from Booster's values. mbedTLS must
+// hold a whole TLS record, up to 16 KB, before it can decrypt it, so the
+// receive window, and the pbuf pool the Wi-Fi driver receives into, must take
+// a record with room to spare. With the HTTP profile's 4 x MSS the window
+// closed partway through the first large record and the transfer stalled until
+// lwIP's 15 s timeout. TIME_WAIT lasts 2 x TCP_MSL: 20 s instead of 2
+// minutes, so a chain of redirects does not use up the pcbs. Each TLS
+// connection takes two ALTCP pcbs (TLS over TCP). The TLS layer decrypts into
+// pool pbufs too, and download.c holds the body until the card has taken it,
+// so a decrypted 16 KB record (11 pool pbufs) waits while the next record's
+// segments arrive: with 24 the pool ran out twice in a 1 MB HTTPS download.
+// Peaks measured over every test download, redirect chains included: 25 pool
+// pbufs, 21 segments, 4 TCP pcbs, 2 ALTCP pcbs, no other pbufs, no failed
+// allocation. Booster's 32 other pbufs and 10 ALTCP pcbs are for its web
+// server.
+#define MEMP_NUM_PBUF 8
+#define MEMP_NUM_TCP_PCB 8
+#define MEMP_NUM_ALTCP_PCB 4
+#define MEMP_NUM_TCP_SEG 32
+#define MEMP_NUM_ARP_QUEUE 10
+#define PBUF_POOL_SIZE 32
+#define TCP_MSL 10000UL
+#else
+// HTTP profile (the default): the template's sizes. Peaks measured over every
+// test download: 5 of 12 pool pbufs, 4 of 16 segments, 1 TCP pcb, no failed
+// allocation.
 #define MEMP_NUM_PBUF 8
 #define MEMP_NUM_TCP_PCB 4
 #define MEMP_NUM_TCP_SEG 16
 #define MEMP_NUM_ARP_QUEUE 2
 #define PBUF_POOL_SIZE 12
+#endif
 #define LWIP_ARP 1
 #define LWIP_ETHERNET 1
 #define LWIP_ICMP 1
 #define LWIP_RAW 0
 #define TCP_MSS 1460
+#if APP_DOWNLOAD_HTTPS
+#define TCP_WND (20 * TCP_MSS)
+#define TCP_SND_BUF (4 * TCP_MSS)
+#define TCP_SND_QUEUELEN ((4 * (TCP_SND_BUF) + (TCP_MSS - 1)) / (TCP_MSS))
+#else
 #define TCP_WND (4 * TCP_MSS)
 #define TCP_SND_BUF (4 * TCP_MSS)
 #define TCP_SND_QUEUELEN ((2 * (TCP_SND_BUF) + (TCP_MSS - 1)) / (TCP_MSS))
+#endif
 #define LWIP_NETIF_STATUS_CALLBACK 1
 #define LWIP_NETIF_LINK_CALLBACK 1
 #define LWIP_NETIF_HOSTNAME 1
 #define LWIP_NETCONN 0
-#define MEM_STATS 0
 #define SYS_STATS 0
-#define MEMP_STATS 0
 #define LINK_STATS 0
 // #define ETH_PAD_SIZE                2
 #define LWIP_CHKSUM_ALGORITHM 3
@@ -64,6 +96,21 @@
 #define LWIP_DEBUG 1
 #define LWIP_STATS 1
 #define LWIP_STATS_DISPLAY 1
+#endif
+
+// lwIP counts its failed allocations in debug builds only: a failed one is
+// otherwise silent (a tcp_write that sends nothing, a connection that times
+// out). devdownload.c reports the count and tools/dev/download_harness.py
+// checks it after every download.
+#if defined(_DEBUG) && (_DEBUG != 0)
+#ifndef LWIP_STATS
+#define LWIP_STATS 1
+#endif
+#define MEM_STATS 1
+#define MEMP_STATS 1
+#else
+#define MEM_STATS 0
+#define MEMP_STATS 0
 #endif
 
 #define ETHARP_DEBUG LWIP_DBG_OFF
@@ -128,11 +175,23 @@
 #define HTTPD_FSDATA_FILE "fsdata_srv.c"
 #endif
 
-// Only plain HTTP client: keep ALTCP/TLS disabled to save memory.
+// TLS only in an HTTPS build (APP_DOWNLOAD_HTTPS=1, rp/src/CMakeLists.txt).
+// An HTTP-only build keeps ALTCP off: no TLS code and no ALTCP pcbs.
+#if APP_DOWNLOAD_HTTPS
+#define LWIP_ALTCP 1
+#define LWIP_ALTCP_TLS 1
+#define LWIP_ALTCP_TLS_MBEDTLS 1
+// Encryption, not authentication: no certificate chain is checked, so an
+// HTTPS download is safe from eavesdropping but not from an active
+// man-in-the-middle. There is no CA bundle on the device and no wall clock to
+// check a certificate's validity period against.
+#define ALTCP_MBEDTLS_AUTHMODE MBEDTLS_SSL_VERIFY_NONE
+#else
 #define LWIP_ALTCP 0
 #define MEMP_NUM_ALTCP_PCB 0
 #define LWIP_ALTCP_TLS 0
 #define LWIP_ALTCP_TLS_MBEDTLS 0
+#endif
 
 // Note bug in lwip with LWIP_ALTCP and LWIP_DEBUG
 // https://savannah.nongnu.org/bugs/index.php?62159

@@ -25,8 +25,27 @@
 #define DOWNLOAD_FILENAME_SIZE 64
 #define DOWNLOAD_HOSTNAME_SIZE 128
 #define DOWNLOAD_PROTOCOL_SIZE 16
-#define DOWNLOAD_POLLING_INTERVAL_MS 100
+// The longest URL a download takes, redirect targets included: longer ones
+// are refused, never cut. An HTTPS build takes release-asset URLs, whose
+// signed query strings run to about 1,000 characters after a redirect; an
+// HTTP-only build keeps 256 bytes.
+#if APP_DOWNLOAD_HTTPS == 1
+#define DOWNLOAD_URL_SIZE 1536
+#else
+#define DOWNLOAD_URL_SIZE DOWNLOAD_BUFFLINE_SIZE
+#endif
+// Redirects followed per download, and retries of a hop that failed in
+// transit (a timeout, a refused or dropped connection), each started from
+// download_poll() once DOWNLOAD_SETTLE_MS have passed since the last
+// connection closed: a connection opened within a few milliseconds of the
+// previous one received nothing (measured by Booster).
+#define DOWNLOAD_MAX_REDIRECTS 5
+#define DOWNLOAD_MAX_HOP_RETRIES 2
+#define DOWNLOAD_SETTLE_MS 500
 
+// A download goes STARTED -> IN_PROGRESS (held there through redirects and
+// retries) -> COMPLETED, set by download_poll() once the whole body is on the
+// card, or FAILED at any point. Poll while it is STARTED or IN_PROGRESS.
 typedef enum {
   DOWNLOAD_STATUS_IDLE,
   DOWNLOAD_STATUS_REQUESTED,
@@ -57,17 +76,25 @@ typedef enum {
   DOWNLOAD_MD5MISMATCH_ERROR,
   DOWNLOAD_CANNOTRENAMEFILE_ERROR,
   DOWNLOAD_CANNOTCREATE_CONFIG,
-  DOWNLOAD_CANNOTDELETECONFIGSECTOR_ERROR
+  DOWNLOAD_CANNOTDELETECONFIGSECTOR_ERROR,
+  DOWNLOAD_UNSUPPORTEDSCHEME_ERROR,  // neither http:// nor https://
+  DOWNLOAD_HTTPSNOTBUILT_ERROR,      // https:// in a build without
+                                     // APP_DOWNLOAD_HTTPS
+  DOWNLOAD_URLTOOLONG_ERROR,  // longer than DOWNLOAD_URL_SIZE or its parts
+  DOWNLOAD_HTTPSTATUS_ERROR,  // not 2xx: download_getHttpStatus() says which
+  DOWNLOAD_TOOMANYREDIRECTS_ERROR,  // past DOWNLOAD_MAX_REDIRECTS
+  DOWNLOAD_TIMEOUT_ERROR,           // nothing received for lwIP's 15 s
+  DOWNLOAD_TRANSFER_ERROR  // DNS, connection, length mismatch or write failure
 } download_err_t;
 
 typedef struct {
   char protocol[DOWNLOAD_PROTOCOL_SIZE];
   char host[DOWNLOAD_HOSTNAME_SIZE];
-  char uri[DOWNLOAD_BUFFLINE_SIZE];
+  uint16_t port;  // 0: the scheme's default
+  char uri[DOWNLOAD_URL_SIZE];
 } download_url_components_t;
 
 typedef struct {
-  char url[DOWNLOAD_BUFFLINE_SIZE];
   char filename[DOWNLOAD_FILENAME_SIZE];
 } download_file_t;
 
@@ -75,7 +102,10 @@ typedef struct {
  * @brief Initiates the download by parsing the current URL, opening a temporary
  * file, and starting the HTTP client request for the file. Checks and prepares
  * the file system environment (e.g., clearing read-only attributes, handling
- * locked files) before initiating the asynchronous download.
+ * locked files) before initiating the asynchronous download. The scheme picks
+ * the transport: http:// is plain TCP, https:// is TLS in a build with
+ * APP_DOWNLOAD_HTTPS=1 and refused otherwise. A URL longer than
+ * DOWNLOAD_URL_SIZE is refused. The server's certificate is not verified.
  *
  * @return A download_err_t code indicating a successful start or a specific
  * error.
@@ -84,22 +114,24 @@ download_err_t download_start(void);
 
 /**
  * @brief Polls the download process by invoking the asynchronous context
- * routines. Processes incoming data packets and HTTP events. Periodically waits
- * for a defined interval to allow the download to progress until the process is
- * complete.
+ * routines. Processes incoming data packets and HTTP events, and starts the
+ * next request of a redirect or a retry. Never waits: call it from a loop that
+ * keeps serving the ST, until it reports completion.
  *
- * @return DOWNLOAD_POLL_CONTINUE if download is in progress,
- * DOWNLOAD_POLL_COMPLETED when finished.
+ * Only a 2xx response is written to the file. Anything else, a timeout or a
+ * transfer error fails the download, and the temporary file is deleted.
+ *
+ * @return DOWNLOAD_POLL_CONTINUE while in progress, DOWNLOAD_POLL_COMPLETED
+ * when the file arrived whole, DOWNLOAD_POLL_ERROR when it failed
+ * (download_getError() says why).
  */
 download_poll_t download_poll(void);
 
 /**
- * @brief Finalizes the download process by closing the temporary file and
- * releasing resources. Performs error handling during file closure and cleans
- * up HTTPS configurations if used.
+ * @brief Finalizes the download process by closing the temporary file.
  *
- * @return A download_err_t code indicating success or the specific error
- * encountered.
+ * @return DOWNLOAD_OK when the file arrived whole, otherwise the reason the
+ * download failed (as download_getError()).
  */
 download_err_t download_finish(void);
 
@@ -158,5 +190,23 @@ void download_setFilepath(const char *path);
  * @return A pointer to a download_url_components_t structure.
  */
 const download_url_components_t *download_getUrlComponents(void);
+
+/**
+ * @brief The name the download is saved under in the app folder: the last
+ * segment of the URL's path, or "default.bin" when it has none.
+ *
+ * @return A null-terminated string, empty before the first download_start().
+ */
+const char *download_getFilename(void);
+
+/**
+ * @brief Why the last download failed, DOWNLOAD_OK while none has.
+ */
+download_err_t download_getError(void);
+
+/**
+ * @brief The HTTP status of the last response, 0 before one arrived.
+ */
+int download_getHttpStatus(void);
 
 #endif  // DOWNLOAD_H

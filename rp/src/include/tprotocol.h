@@ -20,7 +20,12 @@
   0  // Set to 1 to clear the memory before starting the protocol
 
 #define PROTOCOL_HEADER 0xABCD
-#define PROTOCOL_READ_RESTART_MICROSECONDS 10000
+// Resynchronise the parser after this much silence on the command channel.
+// The timestamp is refreshed on every sample, so this is a gap between samples,
+// not a deadline for a whole frame. Samples are timestamped when they are
+// parsed, in batches drained from the ring, so it must also cover the main
+// loop's own longest pass between two drains.
+#define PROTOCOL_READ_RESTART_MICROSECONDS 50000
 #define MAX_PROTOCOL_PAYLOAD_SIZE \
   2048 + 64  // 2048 bytes of payload plus 64 bytes of overhead for safety
 
@@ -185,6 +190,9 @@ static inline void __not_in_flash_func(tprotocol_parse)(
       PROTOCOL_READ_RESTART_MICROSECONDS) {
     tprotocol_nextTPstep = HEADER_DETECTION;
   }
+  // Every sample restarts the silence window, not only a header: a frame
+  // whose samples span two drains of the ring is still one frame.
+  tprotocol_last_header_found = tprotocol_new_header_found;
 
   switch (tprotocol_nextTPstep) {
     case HEADER_DETECTION:
@@ -192,7 +200,6 @@ static inline void __not_in_flash_func(tprotocol_parse)(
         // Move to command read
         tprotocol_nextTPstep = COMMAND_READ;
       }
-      tprotocol_last_header_found = tprotocol_new_header_found;
       break;
 
     case COMMAND_READ:
@@ -202,6 +209,13 @@ static inline void __not_in_flash_func(tprotocol_parse)(
 
     case PAYLOAD_SIZE_READ:
       tprotocol_transmission.payload_size = data;
+      if (data > MAX_PROTOCOL_PAYLOAD_SIZE) {
+        // More than the payload buffer holds: storing it would write past
+        // the buffer and the checksum would read past it. Drop the command;
+        // the ST gets no answer and reports an error.
+        tprotocol_nextTPstep = HEADER_DETECTION;
+        break;
+      }
     case PAYLOAD_READ_START:
       tprotocol_transmission.bytes_read = 0;
       tprotocol_nextTPstep = PAYLOAD_READ_INPROGRESS;
@@ -210,11 +224,13 @@ static inline void __not_in_flash_func(tprotocol_parse)(
       }
       break;
     case PAYLOAD_READ_INPROGRESS:
-      // Store the 16-bit chunk into the payload array
+      // Store the 16-bit chunk into the payload array. "l": Thumb-1's strh
+      // takes only r0-r7. With "r" a Release build with DEBUG_MODE=1 got ip
+      // and did not assemble ("lo register required").
       asm("strh %0, [%1]"
           :
-          : "r"(data),
-            "r"(&tprotocol_transmission
+          : "l"(data),
+            "l"(&tprotocol_transmission
                      .payload[(tprotocol_transmission.bytes_read / 2)])
           : "memory");
       tprotocol_transmission.bytes_read += 2;

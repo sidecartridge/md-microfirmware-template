@@ -23,35 +23,6 @@
 ; bit 30: TOS application .
 ; bit 31: TTP
 
-ROM4_ADDR			equ $FA0000
-
-; Shared 64 KB region layout (must match rp/src/include/chandler.h).
-;
-;   $FA0000  CARTRIDGE			m68k header + code (max 8 KB)
-;   $FA2000  CMD_MAGIC_SENTINEL_ADDR	4 B
-;   $FA2004  RANDOM_TOKEN_ADDR		4 B
-;   $FA2008  RANDOM_TOKEN_SEED_ADDR	4 B
-;   $FA200C  reserved			4 B
-;   $FA2010  SHARED_VARIABLES		240 B (60 x 4-byte slots)
-;   $FA2100  APP_BUFFERS_ADDR	       ~48 KB free arena (TRANSTABLE etc.)
-;   $FAE0C0  FRAMEBUFFER_ADDR		8000 B (320x200 mono, at the top)
-;   $FAFFFF  end of region
-
-CARTRIDGE_CODE_SIZE	equ $2000	; 8 KB max for cartridge header + code
-SHARED_BLOCK_ADDR	equ (ROM4_ADDR + CARTRIDGE_CODE_SIZE)		; $FA2000
-CMD_MAGIC_SENTINEL_ADDR	equ SHARED_BLOCK_ADDR				; $FA2000
-
-FRAMEBUFFER_SIZE	equ 8000	; 8000 bytes of a 320x200 monochrome screen
-FRAMEBUFFER_ADDR	equ (ROM4_ADDR + $10000 - FRAMEBUFFER_SIZE)	; $FAE040
-APP_BUFFERS_ADDR	equ (SHARED_BLOCK_ADDR + $100)			; $FA2100
-TRANSTABLE		equ APP_BUFFERS_ADDR				; high-res translation table
-
-; User firmware entry point. The cartridge image places userfw.s at
-; offset $0800 of BOOT.BIN via target/atarist/src/userfw.ld; main.s
-; gets the first 2 KB ($0000..$07FF), userfw gets the next 6 KB
-; ($0800..$1FFF). The CARTRIDGE_CODE_SIZE = 8 KB cap covers both.
-USERFW			equ (ROM4_ADDR + $800)				; $FA0800
-
 SCREEN_SIZE			equ (-4096)	; Use the memory before the screen memory to store the copied code
 COLS_HIGH			equ 20		; 16 bit columns in the ST
 ROWS_HIGH			equ 200		; 200 rows in the ST
@@ -71,24 +42,6 @@ CMD_START			equ 4		; Hand control to the user firmware (USERFW)
 
 _conterm			equ $484	; Conterm device number
 
-
-; Constants needed for the commands
-RANDOM_TOKEN_ADDR:        equ (CMD_MAGIC_SENTINEL_ADDR + 4)  ; $FA2004
-RANDOM_TOKEN_SEED_ADDR:   equ (RANDOM_TOKEN_ADDR + 4)        ; $FA2008
-; $FA200C: 4-byte slot reserved for future framework use. chandler_init
-; zeroes it at boot; apps must not write here.
-RESERVED_SLOT_ADDR:       equ (RANDOM_TOKEN_SEED_ADDR + 4)   ; $FA200C
-RANDOM_TOKEN_POST_WAIT:   equ $1                             ; Wait cycles after the RNG is ready
-COMMAND_TIMEOUT           equ $0000FFFF                      ; Timeout for the command
-COMMAND_WRITE_TIMEOUT     equ COMMAND_TIMEOUT                ; Timeout for write commands
-
-SHARED_VARIABLES:         equ (RESERVED_SLOT_ADDR + 4)       ; $FA2010 (60 indexed 4-byte slots)
-
-ROMCMD_START_ADDR:        equ $FB0000					  ; We are going to use ROM3 address
-CMD_MAGIC_NUMBER    	  equ ($ABCD) 					  ; Magic number header to identify a command
-CMD_RETRIES_COUNT	  	  equ 3							  ; Number of retries for the command
-CMD_SET_SHARED_VAR		  equ 1							  ; This is a fake command to set the shared variables
-														  ; Used to store the system settings
 ; App commands for the terminal
 APP_TERMINAL 				equ $0 ; The terminal app
 
@@ -96,8 +49,9 @@ APP_TERMINAL 				equ $0 ; The terminal app
 APP_TERMINAL_START   		equ $0 ; Start terminal command
 APP_TERMINAL_KEYSTROKE 		equ $1 ; Keystroke command
 
-_dskbufp                equ $4c6                            ; Address of the disk buffer pointer    
-
+; The cartridge window's layout and the command channel, shared with every
+; module that talks to the RP.
+	include inc/sidecart_layout.s
 
 	include inc/sidecart_macros.s
 	include inc/tos.s
@@ -166,6 +120,16 @@ check_keys			macro
 
 					endm
 
+; The Mega STE's setting as megaste_take found it, and its word off the stack.
+; This runs from the copy in RAM: nothing PC-relative outside it.
+megaste_hand_back	macro
+					tst.b (sp)
+					beq.s .\@megaste_none
+					move.b 1(sp), MEGASTE_SPEED_CACHE_REG.w
+.\@megaste_none:
+					addq.l #2, sp
+					endm
+
 check_commands		macro
 					move.l CMD_MAGIC_SENTINEL_ADDR, d6	; Store in the D6 register the remote command value
 					cmp.l #CMD_TERMINAL, d6		; Check if the command is a terminal command
@@ -213,6 +177,13 @@ first:
     even
 
 pre_auto:
+; On a Mega STE, the cache off until the cartridge hands over: the setup menu
+; talks to the cartridge all along, and with the cache on its commands never
+; reach the RP. The speed stays the user's. The word under the return address
+; keeps the setting (megaste_take, megaste_hand_back).
+	clr.w -(sp)
+	bsr megaste_take
+
 ; Relocate the content of the cartridge ROM to the RAM
 
 ; Get the screen memory address to display
@@ -231,9 +202,42 @@ pre_auto:
     dbf d6, .copy_rom_code
 	jmp (a3)
 
+; The word the caller pushed takes a flag and the Mega STE's speed and cache
+; register, and the cache is turned off; the speed stays. Nothing has written
+; the machine type into the shared variables yet, so the cookie says.
+megaste_take:
+	move.l _p_cookies.w, d0
+	beq.s .megaste_take_done
+	move.l d0, a0
+.megaste_take_next:
+	move.l (a0)+, d0
+	beq.s .megaste_take_done
+	cmp.l #'_MCH', d0
+	beq.s .megaste_take_mch
+	addq.w #4, a0
+	bra.s .megaste_take_next
+.megaste_take_mch:
+	cmp.l #COOKIE_JAR_MEGASTE, (a0)
+	bne.s .megaste_take_done
+	st 4(sp)							; a setting to put back
+	move.b MEGASTE_SPEED_CACHE_REG.w, 5(sp)
+	bclr #0, MEGASTE_SPEED_CACHE_REG.w
+.megaste_take_done:
+	rts
+
 start_rom_code:
 ; We assume the screen memory address is in D0 after the get_screen_base call
 	move.l d0, a6				; Save the screen memory address in A6
+
+; Tell the RP the ST has booted, so it starts this session fresh, and then
+; which machine and TOS this is, in shared variables 0 and 1. The senders'
+; Mega STE and 68030 checks read the machine from there. Both wait until the
+; RP answers; the senders keep a6.
+.hello:
+	send_sync CMD_ST_HELLO, 0
+	bne.s .hello
+	bsr detect_hw
+	bsr get_tos_version
 
 ; Enable bconin to return shift key status
 	or.b #%1000, _conterm.w
@@ -326,6 +330,7 @@ start_rom_code:
 
 boot_gem:
 	; If we get here, continue loading GEM
+	megaste_hand_back
     rts
 
 ; Dispatcher for the user firmware module. Reached on CMD_START via the
@@ -336,12 +341,33 @@ boot_gem:
 ; the same way md-drives-emulator's rom_function dispatches into
 ; GEMDRIVE/FLOPPYEMUL/ACSIEMUL/RTCEMUL.
 rom_function:
+	; The user firmware's rts goes back to TOS, so the Mega STE's word comes
+	; off the stack first and the user's cache setting is back. Code there
+	; that talks to the cartridge turns the cache off around each send
+	; (megaste_cache_off / megaste_cache_back in inc/sidecart_macros.s).
+	megaste_hand_back
     jmp USERFW
 
 ; Shared functions included at the end of the file
 ; Don't forget to include the macros for the shared functions at the top of file
     include "inc/sidecart_functions.s"
 
+; The NOP tail. The senders' wait loop must never be the last code of a module:
+; firmware.py strips trailing zero bytes from the image, the RP copies only
+; that many words into the cartridge window, and both the write sender (its
+; code size includes 4 bytes past the loop) and the 68000's prefetch read past
+; the loop's last word. Every module that includes sidecart_functions.s ends
+; like this.
+	even
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+main_end:
 
 end_rom_code:
 end_pre_auto:

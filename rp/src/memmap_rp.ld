@@ -295,12 +295,22 @@ SECTIONS
 
 
 
-    /* stack limit is poorly named, but historically is maximum heap ptr */
-    __StackLimit = ORIGIN(RAM) + LENGTH(RAM) + LENGTH(ROM_IN_RAM);
+    /* stack limit is poorly named, but historically is maximum heap ptr.
+     * The heap stops where RAM ends: ROM_IN_RAM right above it is the
+     * cartridge window the ST reads, and a heap allowed to grow into it hands
+     * out addresses inside the image. The SDK's sbrk refuses to go past this
+     * symbol, so malloc returns NULL instead. */
+    __StackLimit = ORIGIN(RAM) + LENGTH(RAM);
     __StackOneTop = ORIGIN(SCRATCH_X) + LENGTH(SCRATCH_X);
     __StackTop = ORIGIN(SCRATCH_Y) + LENGTH(SCRATCH_Y);
     __StackOneBottom = __StackOneTop - SIZEOF(.stack1_dummy);
-    __StackBottom = __StackTop - SIZEOF(.stack_dummy);
+    /* An HTTPS build (APP_DOWNLOAD_HTTPS=1, rp/src/CMakeLists.txt) defines
+     * __core0_stack_takes_scratch_x: core 0's stack then runs on down through
+     * SCRATCH_X, 8 KB in all, and the stack guard (at __StackBottom) sits at
+     * its bottom. Core 1 never starts, so nothing else uses SCRATCH_X. A TLS
+     * handshake took 3,168 of the 4 KB. */
+    __StackBottom = DEFINED(__core0_stack_takes_scratch_x)
+        ? ORIGIN(SCRATCH_X) : __StackTop - SIZEOF(.stack_dummy);
     PROVIDE(__stack = __StackTop);
 
     /* Check if data + heap + stack exceeds RAM limit */

@@ -12,8 +12,16 @@
 
 #include "pico/async_context.h"
 
-#if APP_DOWNLOAD_HTTPS == 1
+// APP_DOWNLOAD_HTTPS comes from rp/src/CMakeLists.txt, for every source file of
+// the firmware. A file built with another value would lay HTTPC_REQUEST_T out
+// differently from the rest.
+#ifndef APP_DOWNLOAD_HTTPS
+#error "APP_DOWNLOAD_HTTPS is not defined: it comes from rp/src/CMakeLists.txt"
+#endif
+
+// With LWIP_ALTCP off, lwIP maps the altcp_* calls onto plain TCP.
 #include "lwip/altcp.h"
+#if APP_DOWNLOAD_HTTPS == 1
 #include "lwip/altcp_tls.h"
 // Mbed TLS
 #include "mbedtls/ssl.h"  // Server Name Indication TLS extension
@@ -21,16 +29,10 @@
 #include "mbedtls/debug.h"  // Mbed TLS debugging
 #endif                      // MBEDTLS_DEBUG_C
 #include "mbedtls/check_config.h"
-#else
-#include "lwip/tcp.h"
 #endif
 
 #include "include/debug.h"
 #include "lwip/apps/http_client.h"
-
-#ifndef APP_DOWNLOAD_HTTPS
-#define APP_DOWNLOAD_HTTPS 0
-#endif
 
 #ifndef HTTP_INFO
 #define HTTP_INFO printf
@@ -186,5 +188,20 @@ err_t http_client_header_print_fn(httpc_state_t *connection, void *arg,
  */
 err_t http_client_receive_print_fn(void *arg, struct altcp_pcb *conn,
                                    struct pbuf *p, err_t err);
+
+/*! \brief Classify a URL scheme
+ *
+ * @param protocol scheme string from a parsed URL, e.g. "http" or "https"
+ * @return 1 for https, 0 for http, -1 for anything else (case-insensitive)
+ */
+int httpc_scheme_is_https(const char *protocol);
+
+#if APP_DOWNLOAD_HTTPS == 1
+/*! \brief The process-wide TLS client config shared by all https requests
+ *
+ * Created on first use and never freed. Returns NULL if creation failed.
+ */
+struct altcp_tls_config *httpc_shared_tls_config(void);
+#endif
 
 #endif

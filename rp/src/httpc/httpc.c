@@ -68,7 +68,37 @@ static void internal_result_fn(void *arg, httpc_result_t httpc_result,
   }
 }
 
+// Classify a URL scheme. Returns 1 for https, 0 for http, -1 for anything
+// else. Case-insensitive, matching how browsers treat schemes.
+int httpc_scheme_is_https(const char *protocol) {
+  if (protocol == NULL) {
+    return -1;
+  }
+  if (strcasecmp(protocol, "https") == 0) {
+    return 1;
+  }
+  if (strcasecmp(protocol, "http") == 0) {
+    return 0;
+  }
+  return -1;
+}
+
 #if APP_DOWNLOAD_HTTPS == 1
+// One TLS config shared by every https request for the lifetime of the
+// process. Creating one per download churns the heap and leaks whenever an
+// error path forgets the matching free; the config holds no per-connection
+// state, so a single instance is correct. Never freed by design.
+struct altcp_tls_config *httpc_shared_tls_config(void) {
+  static struct altcp_tls_config *shared_config = NULL;
+  if (shared_config == NULL) {
+    shared_config = altcp_tls_create_config_client(NULL, 0);
+    if (shared_config == NULL) {
+      HTTP_ERROR("Failed to create shared TLS config\n");
+    }
+  }
+  return shared_config;
+}
+
 // Override altcp_tls_alloc to set sni
 static struct altcp_pcb *altcp_tls_alloc_sni(void *arg, u8_t ip_type) {
   assert(arg);
@@ -100,6 +130,10 @@ int http_client_request_async(async_context_t *context, HTTPC_REQUEST_T *req) {
       req->tls_allocator.arg = req;
     }
     req->settings.altcp_allocator = &req->tls_allocator;
+  } else {
+    // A reused request struct may carry the allocator from a previous
+    // https request; a plain-http request must not inherit it.
+    req->settings.altcp_allocator = NULL;
   }
 #endif
 #endif
