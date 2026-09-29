@@ -205,9 +205,9 @@ catches short-lived allocations between samples. A shortage shows as a peak with
 before the stack, or as plenty of free bytes but a small largest block (fragmentation). `--watch
 SECONDS` samples until Ctrl-C; `--csv FILE` appends every sample for later comparison. If the
 heap changes while it is read, the chunk walk is retried once and otherwise reported as failed.
-In this template the heap's limit, `__StackLimit`, lies past the end of the 64 KB cartridge window
-(`rp/src/memmap_rp.ld`), so the size `heap` reports includes the window: an arena that grows into
-it is overwriting the cartridge image the ST is reading.
+In this template the heap's limit, `__StackLimit`, is the end of `RAM`, where the 64 KB cartridge
+window starts (`rp/src/memmap_rp.ld`), so the size `heap` reports stops short of the window and a
+request that does not fit gets NULL.
 
 OpenOCD is `$OPENOCD`, `openocd` on `PATH`, or `../pico/openocd/src/openocd`; its scripts come
 from `$PICO_OPENOCD_PATH`, the variable `.vscode/launch.json` uses. A command that fails on a

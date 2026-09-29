@@ -183,7 +183,6 @@ The RP drains the ring on every pass of its main loop and never waits: measured 
 Known defects in this path as the code stands — check before building on it:
 
 - A debug build prints its banner, the flash layout and the settings dumps *before* `emul_start()` makes the cartridge live, so a power-cycled ST can boot into GEM on a debug build and into the menu on a release build. At 921,600 baud the cartridge is live 43-69 ms after the banner, and three power cycles of an ST (TOS 1.04) all reached the menu, with the ST's hello 1.1 s after the banner; a machine that probes the cartridge sooner than that is not measured.
-- The settings dump and `network.c`'s connect traces print the Wi-Fi password in clear on debug builds.
 
 ### Memory layout (`rp/src/memmap_rp.ld`)
 The RP2040's 2 MB flash is sliced into named regions, and code is responsible for not stomping on them:
