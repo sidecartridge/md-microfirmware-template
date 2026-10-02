@@ -126,6 +126,13 @@ void term_setCommands(const Command *cmds, size_t count);
 void term_clearInputBuffer(void);
 
 /**
+ * @brief While busy, keystrokes are dropped instead of running commands, as
+ * they are while a command runs: for long work outside a command whose waits
+ * call term_loop(), such as a file written to flash at boot.
+ */
+void term_setBusy(bool busy);
+
+/**
  * @brief Retrieve the current terminal input buffer.
  *
  * This function returns a pointer to the buffer holding the input from the
