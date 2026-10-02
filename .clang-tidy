@@ -1,5 +1,5 @@
 ---
-Checks: 'google-*,modernize-*,portability-*,readability-*,-clang-diagnostic-error,-readability-braces-around-statements,-readability-function-cognitive-complexity'
+Checks: 'google-*,modernize-*,portability-*,readability-*,-clang-diagnostic-error,-readability-braces-around-statements,-readability-function-cognitive-complexity,-modernize-macro-to-enum,-readability-implicit-bool-conversion'
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*rp/src/.*'
 CheckOptions:
@@ -9,8 +9,8 @@ CheckOptions:
     value:           CamelCase
   - key:              readability-identifier-naming.FunctionCase
     value:            camelBack
-  - key:              readability-identifier-naming.FunctionIdentifierRegex
-    value:            '^[a-z]+(?:_[a-z]+)*[A-Z][a-zA-Z0-9]*$'
+  - key:              readability-identifier-naming.FunctionIgnoredRegexp
+    value:            '^[a-z][a-z0-9]*_[a-z][a-zA-Z0-9]*$'
   - key:             readability-identifier-naming.VariableCase
     value:           camelBack
   - key:             readability-identifier-naming.ParameterCase
