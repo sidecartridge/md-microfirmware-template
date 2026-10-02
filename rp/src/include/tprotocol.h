@@ -27,7 +27,7 @@
 // loop's own longest pass between two drains.
 #define PROTOCOL_READ_RESTART_MICROSECONDS 50000
 #define MAX_PROTOCOL_PAYLOAD_SIZE \
-  2048 + 64  // 2048 bytes of payload plus 64 bytes of overhead for safety
+  (2048 + 64)  // 2048 bytes of payload plus 64 bytes of overhead for safety
 
 #define SHOW_COMMANDS 0  // Set to 1 to show commands received
 

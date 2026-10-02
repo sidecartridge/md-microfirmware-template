@@ -39,6 +39,17 @@ static uint8_t protocolWriteIndex = 1;
 static bool protocolBufferReady = false;
 static uint32_t protocolOverwriteCount = 0;
 
+// A command can run for seconds (a file written to flash, an SD card scan),
+// and its waits call term_loop() again so the ST keeps being answered. A key
+// that arrives meanwhile is dropped instead of running inside the command:
+// a launch typed during a launch started a second flash write under the
+// first. Anything else waits for the command to end. Counted for SWD.
+// term_setBusy() does the same for long work outside a command.
+static bool termBusy = false;
+uint32_t termKeysDropped = 0;
+
+void term_setBusy(bool busy) { termBusy = busy; }
+
 #define TERM_NETWORK_INFO_VALUE_SIZE 64
 #define TERM_MENU_LIVE_LINE_MAX 128
 
@@ -562,6 +573,15 @@ void __not_in_flash_func(term_loop)() {
   bool protocolReady = false;
   uint32_t overwriteCountSnapshot = 0;
 
+  if (protocolBufferReady && termBusy) {
+    if (protocolBuffers[protocolReadIndex].command_id ==
+        APP_TERMINAL_KEYSTROKE) {
+      protocolBufferReady = false;
+      termKeysDropped++;
+      DPRINTF("Keystroke dropped: a command is running\n");
+    }
+    return;
+  }
   if (protocolBufferReady) {
     snapshot = &protocolBuffers[protocolReadIndex];
     protocolBufferReady = false;
@@ -614,6 +634,7 @@ void __not_in_flash_func(term_loop)() {
 #endif
 
     // Handle the command
+    termBusy = true;
     switch (snapshot->command_id) {
       case APP_TERMINAL_START: {
         display_termStart(DISPLAY_TILES_WIDTH, DISPLAY_TILES_HEIGHT);
@@ -655,6 +676,7 @@ void __not_in_flash_func(term_loop)() {
         DPRINTF("Unknown command\n");
         break;
     }
+    termBusy = false;
     // Random-token publish is owned by chandler_loop; nothing more to do here.
     (void)randomToken;
   }
@@ -1150,6 +1172,10 @@ void term_cmdSave(const char *arg) {
 
 void term_cmdErase(const char *arg) {
   settings_erase(aconfig_getContext());
+  // Erasing frees every entry, and the app goes on looking them up by name:
+  // back to the defaults in RAM, as on a device that never saved any. They
+  // reach flash with the next save, or at the next boot.
+  aconfig_init(CURRENT_APP_UUID_KEY);
   term_printString("Settings erased.\n");
 }
 

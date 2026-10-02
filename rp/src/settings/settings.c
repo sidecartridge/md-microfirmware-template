@@ -159,10 +159,11 @@ static int settingsLoadAllEntries(SettingsContext *ctx,
   DPRINTF("Magic value found in FLASH: %lu. Loading existing values.\n",
           storedMagic);
 
-  // Now read each entry in a loop
-  // We'll simply read as many entries as we can, up to numEntries
+  // Now read each entry in a loop, up to the area's slots, not the number of
+  // defaults: another firmware may have stored keys this one has no default
+  // for (Booster writes the global settings), in any order.
   uint16_t count = 0;
-  while (count < numEntries &&
+  while (count < maxEntries &&
          (currentAddress + sizeof(SettingsConfigEntry)) <=
              (uint8_t *)(ctx->flashSettingsOffset + XIP_BASE +
                          ctx->flashSettingsSize)) {

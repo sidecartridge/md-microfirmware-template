@@ -35,8 +35,10 @@
 // the transfer count runs out and capture stops.
 #define COMM_DMA_REARM_THRESHOLD (0x80000000u)
 
+// In its own section at the start of RAM (memmap_rp.ld), where the alignment
+// leaves no gap. Not zeroed at boot: only what the DMA has written is read.
 static uint16_t commRing[COMM_RING_WORDS]
-    __attribute__((aligned(COMM_RING_SIZE_BYTES)));
+    __attribute__((aligned(COMM_RING_SIZE_BYTES), section(".comm_ring")));
 static uint32_t commReadIdx = 0;
 // Samples captured since the channel was last armed, as of the last poll.
 static uint32_t commLastWritten = 0;

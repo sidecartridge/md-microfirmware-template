@@ -52,12 +52,10 @@ static SettingsContext gSettingsCtx;
 int gconfig_init(const char *currentAppName) {
   DPRINTF("Initializing settings\n");
 
-  // If we know the number of default entries in advance, we can use it
-  // uint16_t entriesCount = sizeof(defaultEntries) / sizeof(defaultEntries[0]);
-
-  // If we don't know the number of default entries in advance, we can use the
-  // max value of entries in the flash.
-  uint16_t entriesCount = CONFIG_BUFFER_SIZE / sizeof(SettingsConfigEntry);
+  // The table's own size: settings_init copies this many defaults, so the
+  // area's slot count read past the table. Stored entries are read up to the
+  // area's slots whatever this count is (settings.c).
+  uint16_t entriesCount = sizeof(defaultEntries) / sizeof(defaultEntries[0]);
 
   int err = settings_init(&gSettingsCtx, defaultEntries, entriesCount,
                           (unsigned int)&_global_config_flash_start - XIP_BASE,

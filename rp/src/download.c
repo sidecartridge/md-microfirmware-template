@@ -48,11 +48,24 @@ static struct pbuf *pending = NULL;
 static struct altcp_pcb *pendingConn = NULL;
 static uint8_t *writeChunk = NULL;  // on the heap only while a download runs
 
-// Generates a temporary file path for downloads.
+// The app's folder, or NULL when its settings have none (after `erase`, or
+// an app without the key). Read through NULL, it was the boot ROM's bytes at
+// address 0, and the file went to a path made of them.
+static const char *downloadFolder(void) {
+  SettingsConfigEntry *entry =
+      settings_find_entry(aconfig_getContext(), ACONFIG_PARAM_FOLDER);
+  return (entry != NULL) ? entry->value : NULL;
+}
+
+// Generates a temporary file path for downloads: empty without a folder, so
+// every file operation on it fails.
 static void getTmpFilenamePath(char filename[DOWNLOAD_BUFFLINE_SIZE]) {
-  snprintf(
-      filename, DOWNLOAD_BUFFLINE_SIZE, "%s/tmp.download",
-      settings_find_entry(aconfig_getContext(), ACONFIG_PARAM_FOLDER)->value);
+  const char *folder = downloadFolder();
+  if (folder == NULL) {
+    filename[0] = '\0';
+    return;
+  }
+  snprintf(filename, DOWNLOAD_BUFFLINE_SIZE, "%s/tmp.download", folder);
 }
 
 // Close and delete the temporary file, so a failed or redirected transfer
@@ -470,6 +483,10 @@ download_err_t download_start() {
   dropPending();
   download_err_t err = filepathTooLong ? DOWNLOAD_URLTOOLONG_ERROR
                                        : parseUrl(filepath, &components);
+  if (err == DOWNLOAD_OK && downloadFolder() == NULL) {
+    DPRINTF("No folder setting to download into\n");
+    err = DOWNLOAD_CANNOTOPENFILE_ERROR;
+  }
   if (err == DOWNLOAD_OK && writeChunk == NULL) {
     writeChunk = malloc(DOWNLOAD_WRITE_CHUNK);
     if (writeChunk == NULL) {
@@ -568,10 +585,11 @@ download_err_t download_finish() {
 download_err_t download_confirm() {
   // Get the filename of
   char fname[DOWNLOAD_BUFFLINE_SIZE] = {0};
-  snprintf(
-      fname, sizeof(fname), "%s/%s",
-      settings_find_entry(aconfig_getContext(), ACONFIG_PARAM_FOLDER)->value,
-      fileUrl.filename);
+  const char *folder = downloadFolder();
+  if (folder == NULL) {
+    return DOWNLOAD_CANNOTRENAMEFILE_ERROR;
+  }
+  snprintf(fname, sizeof(fname), "%s/%s", folder, fileUrl.filename);
 
   DPRINTF("Writing file %s\n", fname);
 
