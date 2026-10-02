@@ -6,12 +6,12 @@ void reset_device() {
   save_and_disable_interrupts();
   // watchdog_enable(RESET_WATCHDOG_TIMEOUT, 0);
   watchdog_reboot(0, 0, RESET_WATCHDOG_TIMEOUT);
-  // 20 ms timeout, for example, then the chip will reset
+  // 20 ms timeout, for example, then the chip will reset. Said once: in the
+  // loop it filled the debug console with about 60 lines per reset.
+  DPRINTF("Waiting for the device to reset\n");
   while (1) {
-    // Wait for the reset
-    DPRINTF("Waiting for the device to reset\n");
+    tight_loop_contents();
   }
-  DPRINTF("You should never reach this point\n");
 }
 
 void reset_deviceAndEraseFlash() {
