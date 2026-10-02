@@ -1172,6 +1172,10 @@ void term_cmdSave(const char *arg) {
 
 void term_cmdErase(const char *arg) {
   settings_erase(aconfig_getContext());
+  // Erasing frees every entry, and the app goes on looking them up by name:
+  // back to the defaults in RAM, as on a device that never saved any. They
+  // reach flash with the next save, or at the next boot.
+  aconfig_init(CURRENT_APP_UUID_KEY);
   term_printString("Settings erased.\n");
 }
 

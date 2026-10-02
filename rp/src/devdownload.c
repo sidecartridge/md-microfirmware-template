@@ -36,7 +36,9 @@ static absolute_time_t startedAt;
 static uint8_t hashChunk[4096];
 
 static const char *devdownload_folder(void) {
-  return settings_find_entry(aconfig_getContext(), ACONFIG_PARAM_FOLDER)->value;
+  SettingsConfigEntry *entry =
+      settings_find_entry(aconfig_getContext(), ACONFIG_PARAM_FOLDER);
+  return (entry != NULL) ? entry->value : "";
 }
 
 static bool devdownload_statNamed(FILINFO *info) {
