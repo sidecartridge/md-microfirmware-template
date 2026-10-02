@@ -127,6 +127,14 @@ SECTIONS
     __binary_info_end = .;
     . = ALIGN(4);
 
+    /* The ROM3 capture ring (commemul.c) is aligned to its own size, 16 KB,
+     * for the DMA's address wrap. At the start of RAM that costs nothing; as
+     * the first .bss object it pushed .bss to the next 16 KB boundary and left
+     * the space after .data unused (5 KB in release). */
+    .comm_ring (NOLOAD): {
+        KEEP(*(.comm_ring*))
+    } > RAM
+
    .ram_vector_table (NOLOAD): {
         *(.ram_vector_table)
     } > RAM
