@@ -15,6 +15,8 @@
 
 static TransmissionProtocol pendingProtocol;
 static bool protocolPending = false;
+// The pending command came from chandler_injectProtocol(), not the ST.
+static bool pendingInjected = false;
 
 // The ST's CHANDLER_ST_HELLO: seen since this RP started, and not yet
 // consumed by the app.
@@ -40,6 +42,10 @@ static uint32_t incrementalCmdCount = 0;
 //   chandlerFramePolls      main-loop passes a frame spans, first sample to
 //                           last: a slow sender against slow draining
 //   chandlerPollUs          time spent draining the capture ring
+//   chandlerInjected        commands the probe injected (debug builds),
+//                           counted apart from all of the above: they run
+//                           their callbacks but get no answer, since the ST
+//                           never sent them
 // with the largest single busy, gap and quiet times alongside.
 uint32_t chandlerHandled = 0;
 uint32_t chandlerDropped = 0;
@@ -53,6 +59,7 @@ uint32_t chandlerQuietUs = 0;
 uint32_t chandlerMaxQuietUs = 0;
 uint32_t chandlerFramePolls = 0;
 uint32_t chandlerPollUs = 0;
+uint32_t chandlerInjected = 0;
 static bool chandlerFrameInFlight = false;
 static bool chandlerAwaitingFirstSample = false;
 static uint32_t chandlerLastToken = 0;
@@ -74,6 +81,7 @@ static inline void __not_in_flash_func(chandler_clear_pending_protocol)(void) {
   pendingProtocol.bytes_read = 0;
   pendingProtocol.final_checksum = 0;
   protocolPending = false;
+  pendingInjected = false;
 }
 
 static inline bool __not_in_flash_func(chandler_protocol_matches_pending)(
@@ -202,6 +210,7 @@ bool chandler_injectProtocol(uint16_t commandId, const uint16_t *payload,
   memset(pendingProtocol.payload, 0, sizeof(pendingProtocol.payload));
   memcpy(pendingProtocol.payload, payload, (size + 1u) & ~1u);
   protocolPending = true;
+  pendingInjected = true;
   DPRINTF("Injected command %04x (%u bytes)\n", commandId, (unsigned int)size);
   return true;
 }
@@ -289,6 +298,13 @@ void __not_in_flash_func(chandler_loop)() {
     for (CommandCallbackNode *cur = callbackListHead; cur; cur = cur->next) {
       if (cur->cb) cur->cb(&pendingProtocol, payloadPtr);
     }
+  }
+
+  if (pendingInjected) {
+    // The probe's, not the ST's: no answer, and none of the ST's counters.
+    chandlerInjected++;
+    chandler_clear_pending_protocol();
+    return;
   }
 
   // The answer. The ST spins on it, so nothing slow goes between the callbacks

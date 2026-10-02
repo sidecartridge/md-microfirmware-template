@@ -140,7 +140,7 @@ COUNTERS = ("chandlerHandled", "chandlerDropped", "chandlerRepeated",
             "chandlerChecksumErrors", "commOverruns", "chandlerBusyUs",
             "chandlerMaxBusyUs", "chandlerGapUs", "chandlerMaxGapUs",
             "chandlerQuietUs", "chandlerMaxQuietUs", "chandlerFramePolls",
-            "chandlerPollUs")
+            "chandlerPollUs", "chandlerInjected")
 POSTMORTEM_VARIABLES = ("keepActive", "menuScreenActive", "protocolPending",
                         "incrementalCmdCount", "commReadIdx") + COUNTERS
 BUILD_ID_SYMBOL = "release_build_id"
@@ -628,7 +628,8 @@ def cmd_counters(args: argparse.Namespace) -> int:
           f"(max {v['chandlerMaxGapUs']}), of which quiet {avg('chandlerQuietUs')} us "
           f"(max {v['chandlerMaxQuietUs']}); passes per frame "
           f"{v['chandlerFramePolls'] / n:.2f}" if n else "per command: -")
-    print(f"ring drained for {v['chandlerPollUs'] / 1e6:.3f} s in all")
+    print(f"ring drained for {v['chandlerPollUs'] / 1e6:.3f} s in all; "
+          f"commands injected by the probe {v['chandlerInjected']}")
     return 0
 
 
