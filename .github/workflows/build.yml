@@ -60,7 +60,7 @@ jobs:
       run: arm-none-eabi-gcc --version
 
     - name: Install AtariST Toolkit Docker image
-      run: curl -sL https://github.com/sidecartridge/atarist-toolkit-docker/releases/download/v1.2.1/install_atarist_toolkit_docker.sh | bash
+      run: curl -sL https://github.com/sidecartridge/atarist-toolkit-docker/releases/download/v1.5.0/install_atarist_toolkit_docker.sh | bash
 
     # Date the build by its commit, as tools/dev/flash.sh does, so this build
     # and a local build of the same commit are byte-identical.
