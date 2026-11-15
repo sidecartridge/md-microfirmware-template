@@ -28,9 +28,9 @@ echo "Copy version.txt to each project"
 cp version.txt rp/
 cp version.txt target/
 
-# Display the version information. Not exported: the stcmd that
-# atarist-toolkit-docker's installer writes uses $VERSION as its Docker image
-# tag, and there is no image for the firmware's version.
+# Display the version information. Not exported: the stcmd written by older
+# atarist-toolkit-docker installers (v1.0.0) uses $VERSION as its Docker
+# image tag, and there is no image for the firmware's version.
 VERSION=$(cat version.txt)
 echo "Version: $VERSION"
 
